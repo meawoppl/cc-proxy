@@ -50,6 +50,18 @@ pub struct NewSession {
     pub status: String,
 }
 
+/// NewSession variant that allows specifying the ID (for when we want to use Claude's session ID)
+#[derive(Debug, Insertable)]
+#[diesel(table_name = crate::schema::sessions)]
+pub struct NewSessionWithId {
+    pub id: Uuid,
+    pub user_id: Uuid,
+    pub session_name: String,
+    pub session_key: String,
+    pub working_directory: Option<String>,
+    pub status: String,
+}
+
 #[derive(Debug, Queryable, Selectable, Serialize, Deserialize)]
 #[diesel(table_name = crate::schema::messages)]
 #[diesel(check_for_backend(diesel::pg::Pg))]

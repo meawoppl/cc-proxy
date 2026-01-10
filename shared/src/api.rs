@@ -1,0 +1,152 @@
+//! API client types and trait definitions
+//!
+//! This module defines the API contract that can be implemented
+//! by both native (reqwest) and WASM (gloo-net) HTTP clients.
+
+use serde::{Deserialize, Serialize};
+
+// Re-export types from parent module for convenience
+pub use crate::{DevicePollResponse, MessageInfo, SessionInfo, UserInfo};
+
+/// API error types
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ApiError {
+    /// Network or connection error
+    Network(String),
+    /// Server returned an error status
+    Server { status: u16, message: String },
+    /// Failed to parse response
+    Parse(String),
+    /// Authentication required or failed
+    Auth(String),
+    /// Resource not found
+    NotFound(String),
+}
+
+impl std::fmt::Display for ApiError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ApiError::Network(msg) => write!(f, "Network error: {}", msg),
+            ApiError::Server { status, message } => {
+                write!(f, "Server error ({}): {}", status, message)
+            }
+            ApiError::Parse(msg) => write!(f, "Parse error: {}", msg),
+            ApiError::Auth(msg) => write!(f, "Auth error: {}", msg),
+            ApiError::NotFound(msg) => write!(f, "Not found: {}", msg),
+        }
+    }
+}
+
+impl std::error::Error for ApiError {}
+
+/// Request to create a proxy auth token
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct CreateProxyTokenRequest {
+    pub session_name_prefix: Option<String>,
+}
+
+/// Response from creating a proxy auth token
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateProxyTokenResponse {
+    pub token: String,
+    pub expires_at: String,
+    pub setup_command: String,
+    pub setup_url: String,
+}
+
+/// Health check response
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HealthResponse {
+    pub status: String,
+    pub version: Option<String>,
+}
+
+/// Device flow code request response
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeviceCodeResponse {
+    pub device_code: String,
+    pub user_code: String,
+    pub verification_uri: String,
+    pub expires_in: u64,
+    pub interval: u64,
+}
+
+/// API endpoint definitions
+pub mod endpoints {
+    pub const HEALTH: &str = "/";
+    pub const AUTH_ME: &str = "/auth/me";
+    pub const AUTH_LOGOUT: &str = "/auth/logout";
+    pub const SESSIONS: &str = "/api/sessions";
+    pub const PROXY_TOKENS: &str = "/api/proxy-tokens";
+    pub const DEVICE_CODE: &str = "/auth/device/code";
+    pub const DEVICE_POLL: &str = "/auth/device/poll";
+
+    pub fn session(id: &str) -> String {
+        format!("/api/sessions/{}", id)
+    }
+
+    pub fn session_messages(id: &str) -> String {
+        format!("/api/sessions/{}/messages", id)
+    }
+}
+
+/// Trait defining the cc-proxy API
+///
+/// This trait can be implemented by both native and WASM HTTP clients.
+/// All methods are async and return Result<T, ApiError>.
+#[allow(async_fn_in_trait)]
+pub trait CcProxyApi {
+    /// Check if the server is healthy
+    async fn health(&self) -> Result<HealthResponse, ApiError>;
+
+    /// Get the current authenticated user
+    async fn get_me(&self) -> Result<UserInfo, ApiError>;
+
+    /// List all sessions for the current user
+    async fn list_sessions(&self) -> Result<Vec<SessionInfo>, ApiError>;
+
+    /// Get a specific session by ID
+    async fn get_session(&self, id: &str) -> Result<SessionInfo, ApiError>;
+
+    /// Delete a session
+    async fn delete_session(&self, id: &str) -> Result<(), ApiError>;
+
+    /// Create a new proxy authentication token
+    async fn create_proxy_token(
+        &self,
+        req: CreateProxyTokenRequest,
+    ) -> Result<CreateProxyTokenResponse, ApiError>;
+
+    /// Request a device code for CLI authentication
+    async fn request_device_code(&self) -> Result<DeviceCodeResponse, ApiError>;
+
+    /// Poll for device flow completion
+    async fn poll_device_code(&self, device_code: &str) -> Result<DevicePollResponse, ApiError>;
+}
+
+/// Configuration for creating an API client
+#[derive(Debug, Clone)]
+pub struct ApiClientConfig {
+    /// Base URL of the server (e.g., "http://localhost:3000")
+    pub base_url: String,
+    /// Optional auth token for authenticated requests
+    pub auth_token: Option<String>,
+}
+
+impl ApiClientConfig {
+    pub fn new(base_url: impl Into<String>) -> Self {
+        Self {
+            base_url: base_url.into(),
+            auth_token: None,
+        }
+    }
+
+    pub fn with_token(mut self, token: impl Into<String>) -> Self {
+        self.auth_token = Some(token.into());
+        self
+    }
+
+    pub fn url(&self, endpoint: &str) -> String {
+        format!("{}{}", self.base_url, endpoint)
+    }
+}

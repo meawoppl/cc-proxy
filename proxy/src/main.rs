@@ -11,6 +11,7 @@ use shared::{ProxyInitConfig, ProxyMessage};
 use tokio::io::AsyncBufReadExt;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{error, info, warn};
+use uuid::Uuid;
 
 #[derive(Parser, Debug)]
 #[command(name = "claude-proxy")]
@@ -29,9 +30,13 @@ struct Args {
     #[arg(long)]
     auth_token: Option<String>,
 
-    /// Session name
-    #[arg(long, default_value_t = default_session_name())]
-    session_name: String,
+    /// Session name (auto-generated if not provided)
+    #[arg(long)]
+    session_name: Option<String>,
+
+    /// Force starting a new session instead of resuming
+    #[arg(long)]
+    new_session: bool,
 
     /// Force re-authentication even if cached
     #[arg(long)]
@@ -149,13 +154,83 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
+    // Determine session: resume existing or start new
+    let (session_id, session_name, resuming) = {
+        // Load config with lock to prevent race conditions
+        let (mut config, lock) = ProxyConfig::load_locked()
+            .context("Failed to load config with lock")?;
+
+        // Clone existing session data to avoid borrow issues
+        let existing_session = config.get_directory_session(&cwd).cloned();
+        let had_existing = existing_session.is_some();
+
+        if args.new_session || existing_session.is_none() {
+            // Start a new session
+            let new_session_id = Uuid::new_v4();
+            let new_session_name = args.session_name.clone().unwrap_or_else(default_session_name);
+
+            // Save the new session to config
+            let dir_session = ProxyConfig::create_directory_session(
+                new_session_id,
+                new_session_name.clone(),
+            );
+            config.set_directory_session(cwd.clone(), dir_session);
+            config.save_with_lock(&lock)?;
+
+            if args.new_session && had_existing {
+                warn!(
+                    "Starting new session (--new-session flag) - previous session will not be resumed"
+                );
+                println!(
+                    "  {} {} Starting new session (--new-session flag)",
+                    "⚠".bright_yellow(),
+                    "WARNING:".bright_yellow()
+                );
+            } else if !had_existing {
+                info!("No existing session for directory {}, creating new session {}", cwd, new_session_id);
+                println!(
+                    "  {} No previous session found, starting fresh",
+                    "→".bright_blue()
+                );
+            }
+
+            info!("New session ID: {}", new_session_id);
+            (new_session_id, new_session_name, false)
+        } else {
+            // Resume existing session
+            let existing = existing_session.unwrap();
+            let session_name = args.session_name.clone()
+                .unwrap_or_else(|| existing.session_name.clone());
+
+            // Update last_used timestamp
+            config.touch_directory_session(&cwd);
+            config.save_with_lock(&lock)?;
+
+            info!(
+                "Resuming session {} (created: {}, last used: {})",
+                existing.session_id, existing.created_at, existing.last_used
+            );
+            println!(
+                "  {} Resuming session {} from {}",
+                "→".bright_green(),
+                existing.session_id.to_string()[..8].bright_cyan(),
+                existing.created_at.bright_white()
+            );
+
+            (existing.session_id, session_name, true)
+        }
+        // Lock is released here when it goes out of scope
+    };
+
     println!();
     println!("{}", "╭──────────────────────────────────────╮".bright_blue());
     println!("{}", "│       Claude Code Proxy Starting     │".bright_blue());
     println!("{}", "╰──────────────────────────────────────╯".bright_blue());
     println!();
-    println!("  {} {}", "Session:".dimmed(), args.session_name.bright_white());
+    println!("  {} {}", "Session:".dimmed(), session_name.bright_white());
+    println!("  {} {}", "ID:".dimmed(), session_id.to_string()[..8].bright_cyan());
     println!("  {} {}", "Backend:".dimmed(), args.backend_url.bright_white());
+    println!("  {} {}", "Mode:".dimmed(), if resuming { "resume".bright_yellow() } else { "new".bright_green() });
     println!();
 
     // Get or create auth token
@@ -241,9 +316,11 @@ async fn main() -> Result<()> {
     std::io::Write::flush(&mut std::io::stdout())?;
 
     let register_msg = ProxyMessage::Register {
-        session_name: args.session_name.clone(),
+        session_id,
+        session_name: session_name.clone(),
         auth_token,
         working_directory: cwd.clone(),
+        resuming,
     };
 
     ws_write
@@ -257,13 +334,40 @@ async fn main() -> Result<()> {
     print!("  {} Starting Claude CLI... ", "→".bright_blue());
     std::io::Write::flush(&mut std::io::stdout())?;
 
-    // Generate a unique session ID for Claude
-    let claude_session_id = uuid::Uuid::new_v4();
+    // Create the Claude client
+    // IMPORTANT: The claude-codes crate's ClaudeCliBuilder always adds --session-id,
+    // which conflicts with --resume (Claude CLI error: "--session-id can only be used
+    // with --continue or --resume if --fork-session is also specified").
+    // When resuming, we spawn claude directly to avoid this issue.
+    let mut claude_client = if resuming {
+        // Resume existing session - spawn claude directly with only --resume flag
+        info!("Using --resume {} to resume Claude session", session_id);
 
-    let builder = ClaudeCliBuilder::new().session_id(claude_session_id);
-    let mut claude_client = AsyncClient::from_builder(builder)
-        .await
-        .map_err(|e| anyhow::anyhow!("Failed to start Claude client: {}", e))?;
+        let child = tokio::process::Command::new("claude")
+            .args([
+                "--print",
+                "--verbose",
+                "--output-format", "stream-json",
+                "--input-format", "stream-json",
+                "--resume", &session_id.to_string(),
+            ])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .context("Failed to spawn Claude process for resume")?;
+
+        AsyncClient::new(child)
+            .map_err(|e| anyhow::anyhow!("Failed to create AsyncClient: {}", e))?
+    } else {
+        // New session - use ClaudeCliBuilder which will add --session-id
+        info!("Starting fresh Claude session with ID {}", session_id);
+        let builder = ClaudeCliBuilder::new().session_id(session_id);
+
+        AsyncClient::from_builder(builder)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to start Claude client: {}", e))?
+    };
 
     println!("{}", "started".bright_green());
     println!();
@@ -370,7 +474,7 @@ async fn main() -> Result<()> {
             // Check for incoming user input from WebSocket
             Some(text) = input_rx.recv() => {
                 info!("Sending to Claude: {}", text);
-                let input = ClaudeInput::user_message(&text, claude_session_id);
+                let input = ClaudeInput::user_message(&text, session_id);
 
                 if let Err(e) = claude_client.send(&input).await {
                     error!("Failed to send to Claude: {}", e);

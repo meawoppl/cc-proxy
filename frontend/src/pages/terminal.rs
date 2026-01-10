@@ -1,9 +1,11 @@
+use crate::components::MessageRenderer;
 use crate::utils;
 use futures_util::{SinkExt, StreamExt};
 use gloo_net::websocket::{futures::WebSocket, Message};
 use shared::ProxyMessage;
 use std::cell::RefCell;
 use std::rc::Rc;
+use uuid::Uuid;
 use wasm_bindgen_futures::spawn_local;
 use yew::prelude::*;
 
@@ -21,7 +23,7 @@ pub enum TerminalMsg {
 }
 
 pub struct TerminalPage {
-    messages: Vec<(String, String)>, // (role, content)
+    messages: Vec<String>, // Raw JSON messages for rendering
     input_value: String,
     ws_connected: bool,
     ws_sender: Option<Rc<RefCell<Option<futures_util::stream::SplitSink<WebSocket, Message>>>>>,
@@ -41,11 +43,24 @@ impl Component for TerminalPage {
                 Ok(ws) => {
                     let (mut sender, mut receiver) = ws.split();
 
+                    // Parse session_id as UUID
+                    let session_uuid = match Uuid::parse_str(&session_id) {
+                        Ok(uuid) => uuid,
+                        Err(e) => {
+                            link.send_message(TerminalMsg::WebSocketError(
+                                format!("Invalid session ID: {}", e),
+                            ));
+                            return;
+                        }
+                    };
+
                     // Send registration message with the session we want to connect to
                     let register_msg = ProxyMessage::Register {
-                        session_name: session_id,
+                        session_id: session_uuid,
+                        session_name: session_id.clone(), // Use the string for display purposes
                         auth_token: None,
                         working_directory: String::new(),
+                        resuming: false, // Web clients don't "resume" in the same sense
                     };
 
                     if let Ok(json) = serde_json::to_string(&register_msg) {
@@ -68,14 +83,19 @@ impl Component for TerminalPage {
                                 if let Ok(proxy_msg) = serde_json::from_str::<ProxyMessage>(&text) {
                                     match proxy_msg {
                                         ProxyMessage::ClaudeOutput { content } => {
+                                            // Send the raw JSON content for rich rendering
                                             link.send_message(TerminalMsg::ReceivedOutput(
-                                                serde_json::to_string_pretty(&content)
-                                                    .unwrap_or_else(|_| content.to_string()),
+                                                content.to_string(),
                                             ));
                                         }
                                         ProxyMessage::Error { message } => {
+                                            // Create an error JSON object
+                                            let error_json = serde_json::json!({
+                                                "type": "error",
+                                                "message": message
+                                            });
                                             link.send_message(TerminalMsg::ReceivedOutput(
-                                                format!("[Error] {}", message),
+                                                error_json.to_string(),
                                             ));
                                         }
                                         _ => {}
@@ -118,7 +138,12 @@ impl Component for TerminalPage {
                     return false;
                 }
 
-                self.messages.push(("user".to_string(), input.clone()));
+                // Create a user message JSON for display
+                let user_msg = serde_json::json!({
+                    "type": "user",
+                    "content": input
+                });
+                self.messages.push(user_msg.to_string());
                 self.input_value.clear();
 
                 // Send to WebSocket
@@ -139,7 +164,7 @@ impl Component for TerminalPage {
                 true
             }
             TerminalMsg::ReceivedOutput(output) => {
-                self.messages.push(("assistant".to_string(), output));
+                self.messages.push(output);
                 true
             }
             TerminalMsg::WebSocketConnected(sender) => {
@@ -148,8 +173,11 @@ impl Component for TerminalPage {
                 true
             }
             TerminalMsg::WebSocketError(err) => {
-                self.messages
-                    .push(("system".to_string(), format!("Error: {}", err)));
+                let error_msg = serde_json::json!({
+                    "type": "error",
+                    "message": format!("Connection error: {}", err)
+                });
+                self.messages.push(error_msg.to_string());
                 self.ws_connected = false;
                 true
             }
@@ -192,15 +220,9 @@ impl Component for TerminalPage {
                 <div class="terminal-content">
                     <div class="messages">
                         {
-                            self.messages.iter().map(|(role, content)| {
-                                let class = format!("message {}", role);
+                            self.messages.iter().map(|json| {
                                 html! {
-                                    <div class={class}>
-                                        <div class="message-role">{ role }</div>
-                                        <div class="message-content">
-                                            <pre>{ content }</pre>
-                                        </div>
-                                    </div>
+                                    <MessageRenderer json={json.clone()} />
                                 }
                             }).collect::<Html>()
                         }

@@ -12,14 +12,17 @@ pub fn dashboard_page() -> Html {
     let sessions = use_state(|| Vec::<SessionInfo>::new());
     let loading = use_state(|| true);
     let refresh_trigger = use_state(|| 0u32);
+    let show_new_session = use_state(|| false);
 
-    // Fetch sessions on mount and when refresh_trigger changes
-    {
+    // Fetch sessions function
+    let fetch_sessions = {
         let sessions = sessions.clone();
         let loading = loading.clone();
-        let refresh = *refresh_trigger;
 
-        use_effect_with(refresh, move |_| {
+        Callback::from(move |set_loading: bool| {
+            let sessions = sessions.clone();
+            let loading = loading.clone();
+
             wasm_bindgen_futures::spawn_local(async move {
                 let api_endpoint = utils::api_url("/api/sessions");
                 match Request::get(&api_endpoint).send().await {
@@ -38,8 +41,45 @@ pub fn dashboard_page() -> Html {
                         log::error!("Failed to fetch sessions: {:?}", e);
                     }
                 }
-                loading.set(false);
+                if set_loading {
+                    loading.set(false);
+                }
             });
+        })
+    };
+
+    // Initial fetch on mount
+    {
+        let fetch_sessions = fetch_sessions.clone();
+        use_effect_with((), move |_| {
+            fetch_sessions.emit(true);
+            || ()
+        });
+    }
+
+    // Polling interval for auto-refresh (every 5 seconds)
+    {
+        let fetch_sessions = fetch_sessions.clone();
+        use_effect_with((), move |_| {
+            let interval = gloo::timers::callback::Interval::new(5_000, move || {
+                fetch_sessions.emit(false);
+            });
+
+            // Keep interval alive until component unmounts
+            move || drop(interval)
+        });
+    }
+
+    // Manual refresh when refresh_trigger changes (e.g., after delete)
+    {
+        let fetch_sessions = fetch_sessions.clone();
+        let refresh = *refresh_trigger;
+
+        use_effect_with(refresh, move |_| {
+            // Skip initial render (refresh == 0)
+            if refresh > 0 {
+                fetch_sessions.emit(false);
+            }
             || ()
         });
     }
@@ -65,6 +105,13 @@ pub fn dashboard_page() -> Html {
         })
     };
 
+    let toggle_new_session = {
+        let show_new_session = show_new_session.clone();
+        Callback::from(move |_| {
+            show_new_session.set(!*show_new_session);
+        })
+    };
+
     // Separate sessions by status
     let active_sessions: Vec<_> = sessions
         .iter()
@@ -81,8 +128,25 @@ pub fn dashboard_page() -> Html {
         <div class="dashboard-container">
             <header class="dashboard-header">
                 <h1>{ "Your Claude Code Sessions" }</h1>
-                <button class="logout-button">{ "Logout" }</button>
+                <div class="header-actions">
+                    <button
+                        class={classes!("new-session-button", if *show_new_session { "active" } else { "" })}
+                        onclick={toggle_new_session.clone()}
+                    >
+                        { if *show_new_session { "− Close" } else { "+ New Session" } }
+                    </button>
+                    <button class="logout-button">{ "Logout" }</button>
+                </div>
             </header>
+
+            // Modal overlay for new session
+            if *show_new_session {
+                <div class="modal-overlay" onclick={toggle_new_session.clone()}>
+                    <div class="modal-content" onclick={Callback::from(|e: MouseEvent| e.stop_propagation())}>
+                        <ProxyTokenSetup />
+                    </div>
+                </div>
+            }
 
             if *loading {
                 <div class="loading">
@@ -91,9 +155,8 @@ pub fn dashboard_page() -> Html {
                 </div>
             } else if sessions.is_empty() {
                 <div class="empty-state">
-                    <h2>{ "No Sessions" }</h2>
-                    <p>{ "Connect the Claude proxy from your remote machine to get started." }</p>
-                    <ProxyTokenSetup />
+                    <h2>{ "No Sessions Yet" }</h2>
+                    <p>{ "Click \"+ New Session\" above to connect a Claude proxy from your remote machine." }</p>
                 </div>
             } else {
                 <>
@@ -153,11 +216,11 @@ fn session_portal(props: &SessionPortalProps) -> Html {
 
     let handle_click = {
         let navigator = navigator.clone();
-        let session_name = session.session_name.clone();
+        let session_id = session.id;
 
         Callback::from(move |_| {
             navigator.push(&Route::Terminal {
-                id: session_name.clone(),
+                id: session_id.to_string(),
             });
         })
     };

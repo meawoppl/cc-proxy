@@ -1,4 +1,4 @@
-use crate::{db::DbPool, models::NewSession, AppState};
+use crate::{db::DbPool, models::{NewSession, NewSessionWithId}, AppState};
 use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
@@ -101,12 +101,14 @@ async fn handle_session_socket(socket: WebSocket, app_state: Arc<AppState>) {
                 if let Ok(proxy_msg) = serde_json::from_str::<ProxyMessage>(&text) {
                     match proxy_msg {
                         ProxyMessage::Register {
+                            session_id: claude_session_id,
                             session_name,
                             auth_token,
                             working_directory,
+                            resuming,
                         } => {
-                            // Generate or use session key
-                            let key = session_name.clone();
+                            // Use session_id as the key for in-memory tracking
+                            let key = claude_session_id.to_string();
                             session_key = Some(key.clone());
 
                             // Register in memory
@@ -116,9 +118,9 @@ async fn handle_session_socket(socket: WebSocket, app_state: Arc<AppState>) {
                             if let Ok(mut conn) = db_pool.get() {
                                 use crate::schema::sessions;
 
-                                // Try to find existing session with this key
+                                // Look up by the Claude session ID (which is now our primary key)
                                 let existing: Option<crate::models::Session> = sessions::table
-                                    .filter(sessions::session_key.eq(&key))
+                                    .find(claude_session_id)
                                     .first(&mut conn)
                                     .optional()
                                     .unwrap_or(None);
@@ -140,14 +142,16 @@ async fn handle_session_socket(socket: WebSocket, app_state: Arc<AppState>) {
                                             ))
                                             .execute(&mut conn);
                                     db_session_id = Some(existing_session.id);
-                                    info!("Session reactivated in DB: {}", session_name);
-                                } else {
-                                    // Create new session - validate JWT token to get user_id
-                                    let user_id =
-                                        get_user_id_from_token(&app_state, auth_token.as_deref());
+                                    info!("Session reactivated in DB: {} ({})", session_name, claude_session_id);
+                                } else if resuming {
+                                    // Trying to resume but session doesn't exist in DB
+                                    // This can happen if the session was deleted or is on a different backend
+                                    warn!("Resuming session {} but not found in DB, creating new entry", claude_session_id);
 
+                                    let user_id = get_user_id_from_token(&app_state, auth_token.as_deref());
                                     if let Some(user_id) = user_id {
-                                        let new_session = NewSession {
+                                        let new_session = NewSessionWithId {
+                                            id: claude_session_id,
                                             user_id,
                                             session_name: session_name.clone(),
                                             session_key: key.clone(),
@@ -165,7 +169,39 @@ async fn handle_session_socket(socket: WebSocket, app_state: Arc<AppState>) {
                                         {
                                             Ok(session) => {
                                                 db_session_id = Some(session.id);
-                                                info!("Session persisted to DB: {}", session_name);
+                                                info!("Session created in DB: {} ({})", session_name, claude_session_id);
+                                            }
+                                            Err(e) => {
+                                                error!("Failed to persist session: {}", e);
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    // Create new session with the provided session_id as primary key
+                                    let user_id =
+                                        get_user_id_from_token(&app_state, auth_token.as_deref());
+
+                                    if let Some(user_id) = user_id {
+                                        let new_session = NewSessionWithId {
+                                            id: claude_session_id,
+                                            user_id,
+                                            session_name: session_name.clone(),
+                                            session_key: key.clone(),
+                                            working_directory: if working_directory.is_empty() {
+                                                None
+                                            } else {
+                                                Some(working_directory.clone())
+                                            },
+                                            status: "active".to_string(),
+                                        };
+
+                                        match diesel::insert_into(sessions::table)
+                                            .values(&new_session)
+                                            .get_result::<crate::models::Session>(&mut conn)
+                                        {
+                                            Ok(session) => {
+                                                db_session_id = Some(session.id);
+                                                info!("Session persisted to DB: {} ({})", session_name, claude_session_id);
                                             }
                                             Err(e) => {
                                                 error!("Failed to persist session: {}", e);
@@ -177,7 +213,7 @@ async fn handle_session_socket(socket: WebSocket, app_state: Arc<AppState>) {
                                 }
                             }
 
-                            info!("Session registered: {}", session_name);
+                            info!("Session registered: {} ({})", session_name, claude_session_id);
                         }
                         ProxyMessage::ClaudeOutput { content } => {
                             // Broadcast output to all web clients
@@ -297,16 +333,18 @@ async fn handle_web_client_socket(socket: WebSocket, session_manager: SessionMan
                 if let Ok(proxy_msg) = serde_json::from_str::<ProxyMessage>(&text) {
                     match proxy_msg {
                         ProxyMessage::Register {
+                            session_id,
                             session_name,
                             auth_token: _,
                             working_directory: _,
+                            resuming: _,
                         } => {
-                            // Web client connecting to a session
-                            let key = session_name.clone();
+                            // Web client connecting to a session - use session_id as the key
+                            let key = session_id.to_string();
                             session_key = Some(key.clone());
 
                             session_manager.add_web_client(key, tx.clone());
-                            info!("Web client connected to session: {}", session_name);
+                            info!("Web client connected to session: {} ({})", session_name, session_id);
                         }
                         ProxyMessage::ClaudeInput { content } => {
                             // Forward input to the actual session

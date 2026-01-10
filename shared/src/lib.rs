@@ -5,6 +5,10 @@ use uuid::Uuid;
 pub mod proxy_tokens;
 pub use proxy_tokens::*;
 
+// API client types and trait
+pub mod api;
+pub use api::{ApiClientConfig, ApiError, CcProxyApi};
+
 /// Message types for the WebSocket proxy protocol
 /// These are used to communicate between:
 /// - proxy <-> backend (session connection)
@@ -14,9 +18,17 @@ pub use proxy_tokens::*;
 pub enum ProxyMessage {
     /// Register a new session or connect to an existing one
     Register {
+        /// The Claude Code session ID (UUID) - used as primary key
+        session_id: Uuid,
+        /// Human-readable session name for display
         session_name: String,
+        /// JWT auth token for user authentication
         auth_token: Option<String>,
+        /// Working directory where the session was started
         working_directory: String,
+        /// Whether this is resuming an existing session
+        #[serde(default)]
+        resuming: bool,
     },
 
     /// Output from Claude Code to be displayed
@@ -57,10 +69,15 @@ impl SessionStatus {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SessionInfo {
     pub id: Uuid,
+    pub user_id: Uuid,
     pub session_name: String,
+    pub session_key: String,
     pub working_directory: Option<String>,
     pub status: SessionStatus,
     pub last_activity: String,
+    pub created_at: String,
+    #[serde(default)]
+    pub updated_at: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

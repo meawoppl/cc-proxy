@@ -61,3 +61,7 @@ colored = "2.1"
 
 # Time
 chrono = { workspace = true }
+
+# Unix system calls (for lock file process checking)
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

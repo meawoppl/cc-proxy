@@ -5,13 +5,12 @@
 use crate::components::CopyCommand;
 use crate::utils;
 use gloo_net::http::Request;
-use shared::{CreateProxyTokenRequest, CreateProxyTokenResponse, ProxyTokenListResponse};
+use shared::{CreateProxyTokenRequest, CreateProxyTokenResponse};
 use yew::prelude::*;
 
 #[derive(Clone, PartialEq)]
 enum TokenState {
     Loading,
-    NoToken,
     HasToken(CreateProxyTokenResponse),
     Error(String),
 }
@@ -19,9 +18,8 @@ enum TokenState {
 #[function_component(ProxyTokenSetup)]
 pub fn proxy_token_setup() -> Html {
     let token_state = use_state(|| TokenState::Loading);
-    let creating = use_state(|| false);
 
-    // Check for existing tokens on mount
+    // Auto-generate token on mount
     {
         let token_state = token_state.clone();
 
@@ -31,48 +29,12 @@ pub fn proxy_token_setup() -> Html {
             wasm_bindgen_futures::spawn_local(async move {
                 let api_endpoint = utils::api_url("/api/proxy-tokens");
 
-                match Request::get(&api_endpoint).send().await {
-                    Ok(response) => {
-                        if let Ok(data) = response.json::<ProxyTokenListResponse>().await {
-                            // Check if there are any non-revoked tokens
-                            let active_token = data.tokens.iter().find(|t| !t.revoked);
-
-                            if active_token.is_some() {
-                                // User already has tokens, show the create new option
-                                token_state.set(TokenState::NoToken);
-                            } else {
-                                token_state.set(TokenState::NoToken);
-                            }
-                        } else {
-                            token_state.set(TokenState::NoToken);
-                        }
-                    }
-                    Err(e) => {
-                        log::error!("Failed to fetch tokens: {:?}", e);
-                        token_state.set(TokenState::NoToken);
-                    }
-                }
-            });
-
-            || ()
-        });
-    }
-
-    let on_create_token = {
-        let token_state = token_state.clone();
-        let creating = creating.clone();
-
-        Callback::from(move |_: MouseEvent| {
-            let token_state = token_state.clone();
-            let creating = creating.clone();
-
-            creating.set(true);
-
-            wasm_bindgen_futures::spawn_local(async move {
-                let api_endpoint = utils::api_url("/api/proxy-tokens");
-
                 let request_body = CreateProxyTokenRequest {
-                    name: format!("CLI Setup - {}", js_sys::Date::new_0().to_locale_string("en-US", &js_sys::Object::new())),
+                    name: format!(
+                        "CLI Setup - {}",
+                        js_sys::Date::new_0()
+                            .to_locale_string("en-US", &js_sys::Object::new())
+                    ),
                     expires_in_days: 30,
                 };
 
@@ -97,40 +59,18 @@ pub fn proxy_token_setup() -> Html {
                         token_state.set(TokenState::Error(format!("Request failed: {:?}", e)));
                     }
                 }
-
-                creating.set(false);
             });
-        })
-    };
+
+            || ()
+        });
+    }
 
     match (*token_state).clone() {
         TokenState::Loading => {
             html! {
                 <div class="proxy-setup loading">
                     <div class="spinner-small"></div>
-                    <span>{ "Loading..." }</span>
-                </div>
-            }
-        }
-        TokenState::NoToken => {
-            html! {
-                <div class="proxy-setup">
-                    <h3>{ "Start a Session" }</h3>
-                    <p class="setup-description">
-                        { "Generate a secure token to connect the Claude proxy from your machine." }
-                    </p>
-                    <button
-                        class="create-token-button"
-                        onclick={on_create_token}
-                        disabled={*creating}
-                    >
-                        if *creating {
-                            <span class="spinner-small"></span>
-                            { " Creating..." }
-                        } else {
-                            { "Generate Setup Command" }
-                        }
-                    </button>
+                    <span>{ "Generating setup command..." }</span>
                 </div>
             }
         }
@@ -177,14 +117,6 @@ pub fn proxy_token_setup() -> Html {
                             { format!("This token expires: {}", format_expiry(&token_response.expires_at)) }
                         </p>
                     </div>
-
-                    <button
-                        class="create-another-button"
-                        onclick={on_create_token}
-                        disabled={*creating}
-                    >
-                        { "Generate New Token" }
-                    </button>
                 </div>
             }
         }
@@ -193,12 +125,7 @@ pub fn proxy_token_setup() -> Html {
                 <div class="proxy-setup error">
                     <h3>{ "Error" }</h3>
                     <p class="error-message">{ error }</p>
-                    <button
-                        class="retry-button"
-                        onclick={on_create_token}
-                    >
-                        { "Try Again" }
-                    </button>
+                    <p class="setup-description">{ "Close and try again." }</p>
                 </div>
             }
         }
