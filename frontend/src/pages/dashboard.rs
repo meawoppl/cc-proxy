@@ -17,6 +17,37 @@ use yew::prelude::*;
 /// Type alias for WebSocket sender to reduce type complexity
 type WsSender = Rc<RefCell<Option<futures_util::stream::SplitSink<WebSocket, Message>>>>;
 
+/// Format session display name from session_name and working_directory
+/// Input session_name format: "hostname-YYYYMMDD-HHMMSS"
+/// Returns: "hostname: project_folder" or "hostname" if no working_directory
+fn format_session_display(session: &SessionInfo) -> String {
+    // Extract hostname from session_name (everything before the date suffix)
+    // Format: hostname-YYYYMMDD-HHMMSS
+    let hostname = session
+        .session_name
+        .rsplit('-')
+        .skip(2) // Skip HHMMSS and YYYYMMDD
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect::<Vec<_>>()
+        .join("-");
+
+    let hostname = if hostname.is_empty() {
+        session.session_name.clone()
+    } else {
+        hostname
+    };
+
+    // Extract project folder from working_directory
+    if let Some(ref dir) = session.working_directory {
+        let project = dir.split('/').next_back().unwrap_or(dir);
+        format!("{}: {}", hostname, project)
+    } else {
+        hostname
+    }
+}
+
 /// Message data from the API
 #[derive(Clone, PartialEq, serde::Deserialize)]
 struct MessageData {
@@ -509,7 +540,9 @@ fn session_rail(props: &SessionRailProps) -> Html {
                             <span class="pill-indicator">
                                 { if is_awaiting { "●" } else { "○" } }
                             </span>
-                            <span class="pill-name">{ &session.session_name }</span>
+                            <span class="pill-name" title={session.session_name.clone()}>
+                                { format_session_display(session) }
+                            </span>
                             {
                                 if is_parked {
                                     html! { <span class="pill-parked-badge">{ "ᴾ" }</span> }
@@ -1068,10 +1101,12 @@ impl Component for SessionView {
         html! {
             <div class="session-view">
                 <div class="session-view-header">
-                    <span class="session-name">{ &session.session_name }</span>
+                    <span class="session-name" title={session.session_name.clone()}>
+                        { format_session_display(session) }
+                    </span>
                     {
                         if let Some(dir) = &session.working_directory {
-                            html! { <span class="session-path">{ dir }</span> }
+                            html! { <span class="session-path" title={dir.clone()}>{ dir }</span> }
                         } else {
                             html! {}
                         }

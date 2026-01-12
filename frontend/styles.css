@@ -1770,9 +1770,10 @@ body {
 .pill-name {
     font-size: 0.85rem;
     color: var(--text-primary);
-    max-width: 150px;
+    max-width: 200px;
     overflow: hidden;
     text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .pill-delete {
