@@ -266,7 +266,7 @@ fn render_assistant_group(messages: &[String]) -> Html {
                 <span class="message-type-badge assistant">{ "Assistant" }</span>
                 {
                     if count > 1 {
-                        html! { <span class="message-count" title={format!("{} consecutive responses", count)}>{ format!("Σ{}", count) }</span> }
+                        html! { <span class="message-count" title={format!("{} consecutive messages", count)}>{ format!("{} messages", count) }</span> }
                     } else {
                         html! {}
                     }
