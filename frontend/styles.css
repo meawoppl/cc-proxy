@@ -1265,6 +1265,231 @@ body {
     border-top: 1px solid var(--border-color);
 }
 
+/* ==========================================================================
+   Rich Tool Renderers
+   ========================================================================== */
+
+/* Common tool styling additions */
+.tool-meta {
+    color: var(--text-muted);
+    font-size: 0.75rem;
+    margin-left: auto;
+}
+
+.tool-badge {
+    font-size: 0.65rem;
+    padding: 0.1rem 0.4rem;
+    border-radius: 3px;
+    background: rgba(127, 132, 156, 0.2);
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.tool-badge.background {
+    background: rgba(224, 175, 104, 0.2);
+    color: #e0af68;
+}
+
+/* TodoWrite Tool */
+.todowrite-tool {
+    background: rgba(158, 206, 106, 0.08);
+    border-left-color: var(--success);
+}
+
+.todo-list {
+    margin-top: 0.5rem;
+    padding: 0.5rem;
+    background: rgba(0, 0, 0, 0.15);
+    border-radius: 4px;
+}
+
+.todo-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+    padding: 0.35rem 0.5rem;
+    border-radius: 3px;
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+}
+
+.todo-item:hover {
+    background: rgba(255, 255, 255, 0.03);
+}
+
+.todo-status {
+    flex-shrink: 0;
+    width: 1.2rem;
+    text-align: center;
+    font-weight: bold;
+}
+
+.todo-content {
+    flex: 1;
+    color: var(--text-primary);
+}
+
+.todo-item.pending .todo-status {
+    color: var(--text-muted);
+}
+
+.todo-item.in-progress .todo-status {
+    color: #e0af68;
+}
+
+.todo-item.in-progress {
+    background: rgba(224, 175, 104, 0.1);
+}
+
+.todo-item.completed .todo-status {
+    color: var(--success);
+}
+
+.todo-item.completed .todo-content {
+    color: var(--text-muted);
+    text-decoration: line-through;
+}
+
+/* Bash Tool */
+.bash-tool {
+    background: rgba(127, 132, 156, 0.1);
+    border-left-color: var(--text-secondary);
+}
+
+.bash-tool .tool-icon {
+    color: var(--success);
+    font-weight: bold;
+}
+
+.bash-description {
+    color: var(--text-secondary);
+    font-size: 0.8rem;
+    font-style: italic;
+    padding: 0.25rem 0;
+}
+
+.bash-command {
+    margin: 0;
+    padding: 0.5rem;
+    background: rgba(0, 0, 0, 0.2);
+    border-radius: 4px;
+    color: var(--text-primary);
+    font-size: 0.85rem;
+    white-space: pre-wrap;
+    word-break: break-all;
+}
+
+/* Read Tool */
+.read-tool {
+    background: rgba(122, 162, 247, 0.08);
+    border-left-color: var(--accent);
+}
+
+.file-path {
+    color: var(--accent);
+    font-size: 0.85rem;
+    word-break: break-all;
+}
+
+/* Glob Tool */
+.glob-tool {
+    background: rgba(122, 162, 247, 0.08);
+    border-left-color: var(--accent);
+}
+
+.glob-pattern {
+    color: var(--text-primary);
+    font-size: 0.9rem;
+    padding: 0.25rem 0;
+}
+
+.glob-path {
+    color: var(--text-muted);
+    font-size: 0.8rem;
+}
+
+/* Grep Tool */
+.grep-tool {
+    background: rgba(122, 162, 247, 0.08);
+    border-left-color: var(--accent);
+}
+
+.grep-pattern {
+    color: var(--text-primary);
+    font-size: 0.9rem;
+    padding: 0.25rem 0;
+}
+
+.grep-options {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
+
+.grep-option {
+    color: var(--text-muted);
+    font-size: 0.8rem;
+}
+
+/* Task Tool */
+.task-tool {
+    background: rgba(158, 206, 106, 0.08);
+    border-left-color: var(--success);
+}
+
+.task-agent-type {
+    font-size: 0.75rem;
+    padding: 0.1rem 0.4rem;
+    border-radius: 3px;
+    background: rgba(158, 206, 106, 0.2);
+    color: var(--success);
+}
+
+.task-description {
+    color: var(--text-primary);
+    font-size: 0.85rem;
+    padding: 0.25rem 0;
+}
+
+/* WebFetch Tool */
+.webfetch-tool {
+    background: rgba(122, 162, 247, 0.08);
+    border-left-color: var(--accent);
+}
+
+.webfetch-url {
+    padding: 0.25rem 0;
+}
+
+.webfetch-url a {
+    color: var(--accent);
+    text-decoration: none;
+    word-break: break-all;
+}
+
+.webfetch-url a:hover {
+    text-decoration: underline;
+}
+
+.webfetch-prompt {
+    color: var(--text-muted);
+    font-size: 0.8rem;
+    font-style: italic;
+}
+
+/* WebSearch Tool */
+.websearch-tool {
+    background: rgba(122, 162, 247, 0.08);
+    border-left-color: var(--accent);
+}
+
+.websearch-query {
+    color: var(--text-primary);
+    font-size: 0.9rem;
+    padding: 0.25rem 0;
+}
+
 /* Thinking Block Styling */
 .thinking-block {
     padding: 0.5rem 0.75rem;

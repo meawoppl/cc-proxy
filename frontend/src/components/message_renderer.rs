@@ -492,23 +492,316 @@ fn render_content_blocks(blocks: &[ContentBlock]) -> Html {
     }
 }
 
-/// Render a tool use block with special handling for Edit tool diffs
+/// Render a tool use block with special handling for various tools
+/// Registry pattern - add new tool renderers here
 fn render_tool_use(name: &str, input: &Value) -> Html {
     match name {
         "Edit" => render_edit_tool_diff(input),
         "Write" => render_write_tool(input),
-        _ => {
-            let input_preview = format_tool_input(name, input);
-            html! {
-                <div class="tool-use">
-                    <div class="tool-use-header">
-                        <span class="tool-icon">{ "⚡" }</span>
-                        <span class="tool-name">{ name }</span>
-                    </div>
-                    <pre class="tool-args">{ input_preview }</pre>
-                </div>
+        "TodoWrite" => render_todowrite_tool(input),
+        "Bash" => render_bash_tool(input),
+        "Read" => render_read_tool(input),
+        "Glob" => render_glob_tool(input),
+        "Grep" => render_grep_tool(input),
+        "Task" => render_task_tool(input),
+        "WebFetch" => render_webfetch_tool(input),
+        "WebSearch" => render_websearch_tool(input),
+        _ => render_generic_tool(name, input),
+    }
+}
+
+/// Generic tool renderer for unrecognized tools
+fn render_generic_tool(name: &str, input: &Value) -> Html {
+    let input_preview = format_tool_input(name, input);
+    html! {
+        <div class="tool-use">
+            <div class="tool-use-header">
+                <span class="tool-icon">{ "⚡" }</span>
+                <span class="tool-name">{ name }</span>
+            </div>
+            <pre class="tool-args">{ input_preview }</pre>
+        </div>
+    }
+}
+
+/// Render TodoWrite with status icons and task list
+fn render_todowrite_tool(input: &Value) -> Html {
+    let todos = input
+        .get("todos")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+
+    html! {
+        <div class="tool-use todowrite-tool">
+            <div class="tool-use-header">
+                <span class="tool-icon">{ "📋" }</span>
+                <span class="tool-name">{ "TodoWrite" }</span>
+                <span class="tool-meta">{ format!("({} items)", todos.len()) }</span>
+            </div>
+            <div class="todo-list">
+                {
+                    todos.iter().map(|todo| {
+                        let status = todo.get("status").and_then(|s| s.as_str()).unwrap_or("pending");
+                        let content = todo.get("content").and_then(|c| c.as_str()).unwrap_or("");
+                        let (icon, class) = match status {
+                            "completed" => ("✓", "completed"),
+                            "in_progress" => ("→", "in-progress"),
+                            _ => ("○", "pending"),
+                        };
+                        html! {
+                            <div class={format!("todo-item {}", class)}>
+                                <span class="todo-status">{ icon }</span>
+                                <span class="todo-content">{ content }</span>
+                            </div>
+                        }
+                    }).collect::<Html>()
+                }
+            </div>
+        </div>
+    }
+}
+
+/// Render Bash command with syntax highlighting
+fn render_bash_tool(input: &Value) -> Html {
+    let command = input
+        .get("command")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let description = input
+        .get("description")
+        .and_then(|v| v.as_str());
+    let timeout = input
+        .get("timeout")
+        .and_then(|v| v.as_u64());
+    let background = input
+        .get("run_in_background")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    html! {
+        <div class="tool-use bash-tool">
+            <div class="tool-use-header">
+                <span class="tool-icon">{ "$" }</span>
+                <span class="tool-name">{ "Bash" }</span>
+                {
+                    if background {
+                        html! { <span class="tool-badge background">{ "background" }</span> }
+                    } else {
+                        html! {}
+                    }
+                }
+                {
+                    if let Some(t) = timeout {
+                        html! { <span class="tool-meta">{ format!("timeout: {}ms", t) }</span> }
+                    } else {
+                        html! {}
+                    }
+                }
+            </div>
+            {
+                if let Some(desc) = description {
+                    html! { <div class="bash-description">{ desc }</div> }
+                } else {
+                    html! {}
+                }
             }
-        }
+            <pre class="bash-command">{ format!("$ {}", command) }</pre>
+        </div>
+    }
+}
+
+/// Render Read tool with file path and range info
+fn render_read_tool(input: &Value) -> Html {
+    let file_path = input
+        .get("file_path")
+        .and_then(|v| v.as_str())
+        .unwrap_or("?");
+    let offset = input.get("offset").and_then(|v| v.as_i64());
+    let limit = input.get("limit").and_then(|v| v.as_i64());
+
+    let range_info = match (offset, limit) {
+        (Some(o), Some(l)) => Some(format!("lines {}-{}", o, o + l)),
+        (Some(o), None) => Some(format!("from line {}", o)),
+        (None, Some(l)) => Some(format!("first {} lines", l)),
+        _ => None,
+    };
+
+    html! {
+        <div class="tool-use read-tool">
+            <div class="tool-use-header">
+                <span class="tool-icon">{ "📖" }</span>
+                <span class="tool-name">{ "Read" }</span>
+                {
+                    if let Some(range) = range_info {
+                        html! { <span class="tool-meta">{ range }</span> }
+                    } else {
+                        html! {}
+                    }
+                }
+            </div>
+            <div class="file-path">{ file_path }</div>
+        </div>
+    }
+}
+
+/// Render Glob tool with pattern and path
+fn render_glob_tool(input: &Value) -> Html {
+    let pattern = input
+        .get("pattern")
+        .and_then(|v| v.as_str())
+        .unwrap_or("?");
+    let path = input.get("path").and_then(|v| v.as_str());
+
+    html! {
+        <div class="tool-use glob-tool">
+            <div class="tool-use-header">
+                <span class="tool-icon">{ "🔍" }</span>
+                <span class="tool-name">{ "Glob" }</span>
+            </div>
+            <div class="glob-pattern">{ pattern }</div>
+            {
+                if let Some(p) = path {
+                    html! { <div class="glob-path">{ format!("in {}", p) }</div> }
+                } else {
+                    html! {}
+                }
+            }
+        </div>
+    }
+}
+
+/// Render Grep tool with pattern, options, and path
+fn render_grep_tool(input: &Value) -> Html {
+    let pattern = input
+        .get("pattern")
+        .and_then(|v| v.as_str())
+        .unwrap_or("?");
+    let path = input.get("path").and_then(|v| v.as_str());
+    let glob = input.get("glob").and_then(|v| v.as_str());
+    let file_type = input.get("type").and_then(|v| v.as_str());
+    let case_insensitive = input.get("-i").and_then(|v| v.as_bool()).unwrap_or(false);
+
+    html! {
+        <div class="tool-use grep-tool">
+            <div class="tool-use-header">
+                <span class="tool-icon">{ "🔎" }</span>
+                <span class="tool-name">{ "Grep" }</span>
+                {
+                    if case_insensitive {
+                        html! { <span class="tool-badge">{ "-i" }</span> }
+                    } else {
+                        html! {}
+                    }
+                }
+            </div>
+            <div class="grep-pattern">{ format!("/{}/", pattern) }</div>
+            <div class="grep-options">
+                {
+                    if let Some(g) = glob {
+                        html! { <span class="grep-option">{ format!("--glob={}", g) }</span> }
+                    } else {
+                        html! {}
+                    }
+                }
+                {
+                    if let Some(t) = file_type {
+                        html! { <span class="grep-option">{ format!("--type={}", t) }</span> }
+                    } else {
+                        html! {}
+                    }
+                }
+                {
+                    if let Some(p) = path {
+                        html! { <span class="grep-option">{ format!("in {}", p) }</span> }
+                    } else {
+                        html! {}
+                    }
+                }
+            </div>
+        </div>
+    }
+}
+
+/// Render Task tool with agent type and description
+fn render_task_tool(input: &Value) -> Html {
+    let description = input
+        .get("description")
+        .and_then(|v| v.as_str())
+        .unwrap_or("?");
+    let agent_type = input
+        .get("subagent_type")
+        .and_then(|v| v.as_str())
+        .unwrap_or("agent");
+    let background = input
+        .get("run_in_background")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    html! {
+        <div class="tool-use task-tool">
+            <div class="tool-use-header">
+                <span class="tool-icon">{ "🤖" }</span>
+                <span class="tool-name">{ "Task" }</span>
+                <span class="task-agent-type">{ agent_type }</span>
+                {
+                    if background {
+                        html! { <span class="tool-badge background">{ "background" }</span> }
+                    } else {
+                        html! {}
+                    }
+                }
+            </div>
+            <div class="task-description">{ description }</div>
+        </div>
+    }
+}
+
+/// Render WebFetch tool with URL
+fn render_webfetch_tool(input: &Value) -> Html {
+    let url = input
+        .get("url")
+        .and_then(|v| v.as_str())
+        .unwrap_or("?");
+    let prompt = input
+        .get("prompt")
+        .and_then(|v| v.as_str());
+
+    html! {
+        <div class="tool-use webfetch-tool">
+            <div class="tool-use-header">
+                <span class="tool-icon">{ "🌐" }</span>
+                <span class="tool-name">{ "WebFetch" }</span>
+            </div>
+            <div class="webfetch-url">
+                <a href={url.to_string()} target="_blank" rel="noopener noreferrer">{ url }</a>
+            </div>
+            {
+                if let Some(p) = prompt {
+                    html! { <div class="webfetch-prompt">{ truncate_str(p, 100) }</div> }
+                } else {
+                    html! {}
+                }
+            }
+        </div>
+    }
+}
+
+/// Render WebSearch tool with query
+fn render_websearch_tool(input: &Value) -> Html {
+    let query = input
+        .get("query")
+        .and_then(|v| v.as_str())
+        .unwrap_or("?");
+
+    html! {
+        <div class="tool-use websearch-tool">
+            <div class="tool-use-header">
+                <span class="tool-icon">{ "🔍" }</span>
+                <span class="tool-name">{ "WebSearch" }</span>
+            </div>
+            <div class="websearch-query">{ format!("\"{}\"", query) }</div>
+        </div>
     }
 }
 
