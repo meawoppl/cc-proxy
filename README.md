@@ -34,23 +34,29 @@ Pre-built binaries for all platforms are available from [GitHub Releases](https:
 
 ## Architecture
 
-```
-┌─────────────────┐         WebSocket          ┌──────────────────┐
-│  Dev Machine    │  ─────────────────────────► │   Backend        │
-│                 │                              │   (Axum)         │
-│ claude-proxy ───┤                              │                  │
-│     ↓           │                              │  ┌────────────┐  │
-│  Claude CLI     │                              │  │ PostgreSQL │  │
-└─────────────────┘                              │  └────────────┘  │
-                                                 └────────┬─────────┘
-                                                          │
-                                                    WebSocket
-                                                          │
-                                                          ▼
-                                                 ┌─────────────────┐
-                                                 │   Web Browser   │
-                                                 │   (Yew WASM)    │
-                                                 └─────────────────┘
+```mermaid
+flowchart TB
+    subgraph dev["Dev Machine"]
+        proxy["claude-proxy binary"]
+        codes["claude-codes crate"]
+        claude["claude CLI binary"]
+        proxy --> codes
+        codes --> claude
+    end
+
+    subgraph server["Backend Server"]
+        axum["Axum Web Server"]
+        db[(PostgreSQL)]
+        axum <--> db
+    end
+
+    subgraph browser["Web Browser"]
+        yew["Yew WASM Frontend"]
+    end
+
+    proxy <-->|"WebSocket"| axum
+    yew <-->|"WebSocket"| axum
+    axum -->|"Serves"| yew
 ```
 
 ### Workspace Structure
