@@ -464,9 +464,9 @@ fn render_content_blocks(blocks: &[ContentBlock]) -> Html {
                         ContentBlock::ToolResult { tool_use_id: _, content, is_error } => {
                             let class = if *is_error { "tool-result error" } else { "tool-result" };
                             let text = content.as_deref().unwrap_or("");
-                            // Truncate long results
+                            // Truncate long results (using safe UTF-8 boundary)
                             let display = if text.len() > 500 {
-                                format!("{}...", &text[..500])
+                                format!("{}...", truncate_str(text, 500))
                             } else {
                                 text.to_string()
                             };
@@ -868,7 +868,12 @@ fn truncate_str(s: &str, max_len: usize) -> &str {
     if s.len() <= max_len {
         s
     } else {
-        &s[..max_len]
+        // Find a safe UTF-8 boundary to avoid panics on multi-byte characters
+        let mut end = max_len;
+        while end > 0 && !s.is_char_boundary(end) {
+            end -= 1;
+        }
+        &s[..end]
     }
 }
 

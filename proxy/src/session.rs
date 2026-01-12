@@ -427,7 +427,7 @@ fn log_claude_output(output: &ClaudeOutput) {
                             .map(|c| {
                                 let s = format!("{:?}", c);
                                 if s.len() > 60 {
-                                    format!("{}...", &s[..60])
+                                    format!("{}...", truncate(&s, 60))
                                 } else {
                                     s
                                 }
