@@ -20,6 +20,7 @@ tower-http = { workspace = true }
 # Database - using diesel with postgres
 diesel = { workspace = true }
 diesel-async = { workspace = true }
+diesel_migrations = "2.2"
 deadpool = "0.12"
 
 # Serialization

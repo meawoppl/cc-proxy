@@ -71,6 +71,25 @@ async fn main() -> anyhow::Result<()> {
     // Create database pool
     let pool = db::create_pool()?;
 
+    // Run pending migrations automatically
+    tracing::info!("Running database migrations...");
+    match db::run_migrations(&pool) {
+        Ok(applied) => {
+            if applied.is_empty() {
+                tracing::info!("Database is up to date (no pending migrations)");
+            } else {
+                for migration in &applied {
+                    tracing::info!("Applied migration: {}", migration);
+                }
+                tracing::info!("Successfully applied {} migration(s)", applied.len());
+            }
+        }
+        Err(e) => {
+            tracing::error!("Failed to run database migrations: {}", e);
+            return Err(e);
+        }
+    }
+
     // Create device flow store
     let device_flow_store = handlers::device_flow::DeviceFlowStore::default();
 
