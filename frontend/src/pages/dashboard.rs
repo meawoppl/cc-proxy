@@ -721,6 +721,8 @@ pub enum SessionViewMsg {
     PermissionSelectDown,
     /// Confirm current permission selection
     PermissionConfirm,
+    /// Select and confirm permission option by index (for click/touch)
+    PermissionSelectAndConfirm(usize),
 }
 
 pub struct SessionView {
@@ -1079,6 +1081,12 @@ impl Component for SessionView {
                 }
                 false // Don't re-render, the delegated message will handle it
             }
+            SessionViewMsg::PermissionSelectAndConfirm(index) => {
+                // Select the option and immediately confirm (for click/touch)
+                self.permission_selected = index;
+                ctx.link().send_message(SessionViewMsg::PermissionConfirm);
+                false // Don't re-render, delegated message will handle it
+            }
             SessionViewMsg::ApprovePermission => {
                 if let Some(perm) = self.pending_permission.take() {
                     if let Some(ref sender_rc) = self.ws_sender {
@@ -1293,8 +1301,11 @@ impl Component for SessionView {
                                             } else {
                                                 format!("permission-option {}", class)
                                             };
+                                            let onclick = link.callback(move |_| {
+                                                SessionViewMsg::PermissionSelectAndConfirm(i)
+                                            });
                                             html! {
-                                                <div class={item_class}>
+                                                <div class={item_class} {onclick}>
                                                     <span class="option-cursor">{ cursor }</span>
                                                     <span class="option-label">{ *label }</span>
                                                 </div>
@@ -1303,7 +1314,7 @@ impl Component for SessionView {
                                     }
                                 </div>
                                 <div class="permission-hint">
-                                    { "↑↓ to select, Enter to confirm" }
+                                    { "↑↓ or tap to select" }
                                 </div>
                             </div>
                         }
