@@ -17,6 +17,38 @@ use yew::prelude::*;
 /// Type alias for WebSocket sender to reduce type complexity
 type WsSender = Rc<RefCell<Option<futures_util::stream::SplitSink<WebSocket, Message>>>>;
 
+/// Extract session display parts from session_name and working_directory
+/// Input session_name format: "hostname-YYYYMMDD-HHMMSS"
+/// Returns: (project_name, hostname) - project may be None if no working_directory
+fn get_session_display_parts(session: &SessionInfo) -> (Option<String>, String) {
+    // Extract hostname from session_name (everything before the date suffix)
+    // Format: hostname-YYYYMMDD-HHMMSS
+    let hostname = session
+        .session_name
+        .rsplit('-')
+        .skip(2) // Skip HHMMSS and YYYYMMDD
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect::<Vec<_>>()
+        .join("-");
+
+    let hostname = if hostname.is_empty() {
+        session.session_name.clone()
+    } else {
+        hostname
+    };
+
+    // Extract project folder from working_directory
+    let project = session
+        .working_directory
+        .as_ref()
+        .and_then(|dir| dir.split('/').next_back())
+        .map(|s| s.to_string());
+
+    (project, hostname)
+}
+
 /// Message data from the API
 #[derive(Clone, PartialEq, serde::Deserialize)]
 struct MessageData {
@@ -34,6 +66,8 @@ struct MessagesResponse {
 // Dashboard Page - Focus Flow Design
 // =============================================================================
 
+use std::collections::HashMap;
+
 #[function_component(DashboardPage)]
 pub fn dashboard_page() -> Html {
     let sessions = use_state(Vec::<SessionInfo>::new);
@@ -43,6 +77,9 @@ pub fn dashboard_page() -> Html {
     let focused_index = use_state(|| 0usize);
     let awaiting_sessions = use_state(HashSet::<Uuid>::new);
     let parked_sessions = use_state(HashSet::<Uuid>::new);
+    let session_costs = use_state(HashMap::<Uuid, f64>::new);
+    let connected_sessions = use_state(HashSet::<Uuid>::new);
+    let pending_delete = use_state(|| None::<Uuid>);
 
     // Fetch sessions
     let fetch_sessions = {
@@ -123,24 +160,46 @@ pub fn dashboard_page() -> Html {
         });
     }
 
+    // Show delete confirmation modal
     let on_delete = {
-        let refresh_trigger = refresh_trigger.clone();
+        let pending_delete = pending_delete.clone();
         Callback::from(move |session_id: Uuid| {
-            let refresh_trigger = refresh_trigger.clone();
-            spawn_local(async move {
-                let api_endpoint = utils::api_url(&format!("/api/sessions/{}", session_id));
-                match Request::delete(&api_endpoint).send().await {
-                    Ok(response) if response.status() == 204 => {
-                        refresh_trigger.set(*refresh_trigger + 1);
+            pending_delete.set(Some(session_id));
+        })
+    };
+
+    // Cancel delete
+    let on_cancel_delete = {
+        let pending_delete = pending_delete.clone();
+        Callback::from(move |_| {
+            pending_delete.set(None);
+        })
+    };
+
+    // Confirm delete
+    let on_confirm_delete = {
+        let pending_delete = pending_delete.clone();
+        let refresh_trigger = refresh_trigger.clone();
+        Callback::from(move |_| {
+            if let Some(session_id) = *pending_delete {
+                let refresh_trigger = refresh_trigger.clone();
+                let pending_delete = pending_delete.clone();
+                spawn_local(async move {
+                    let api_endpoint = utils::api_url(&format!("/api/sessions/{}", session_id));
+                    match Request::delete(&api_endpoint).send().await {
+                        Ok(response) if response.status() == 204 => {
+                            refresh_trigger.set(*refresh_trigger + 1);
+                        }
+                        Ok(response) => {
+                            log::error!("Failed to delete session: status {}", response.status());
+                        }
+                        Err(e) => {
+                            log::error!("Failed to delete session: {:?}", e);
+                        }
                     }
-                    Ok(response) => {
-                        log::error!("Failed to delete session: status {}", response.status());
-                    }
-                    Err(e) => {
-                        log::error!("Failed to delete session: {:?}", e);
-                    }
-                }
-            });
+                    pending_delete.set(None);
+                });
+            }
         })
     };
 
@@ -238,6 +297,28 @@ pub fn dashboard_page() -> Html {
                 set.remove(&session_id);
             }
             awaiting_sessions.set(set);
+        })
+    };
+
+    let on_cost_change = {
+        let session_costs = session_costs.clone();
+        Callback::from(move |(session_id, cost): (Uuid, f64)| {
+            let mut map = (*session_costs).clone();
+            map.insert(session_id, cost);
+            session_costs.set(map);
+        })
+    };
+
+    let on_connected_change = {
+        let connected_sessions = connected_sessions.clone();
+        Callback::from(move |(session_id, connected): (Uuid, bool)| {
+            let mut set = (*connected_sessions).clone();
+            if connected {
+                set.insert(session_id);
+            } else {
+                set.remove(&session_id);
+            }
+            connected_sessions.set(set);
         })
     };
 
@@ -391,6 +472,8 @@ pub fn dashboard_page() -> Html {
                         focused_index={*focused_index}
                         awaiting_sessions={(*awaiting_sessions).clone()}
                         parked_sessions={(*parked_sessions).clone()}
+                        session_costs={(*session_costs).clone()}
+                        connected_sessions={(*connected_sessions).clone()}
                         on_select={on_select_session.clone()}
                         on_delete={on_delete.clone()}
                         on_toggle_park={on_toggle_park.clone()}
@@ -411,6 +494,8 @@ pub fn dashboard_page() -> Html {
                                             session={session.clone()}
                                             focused={is_focused}
                                             on_awaiting_change={on_awaiting_change.clone()}
+                                            on_cost_change={on_cost_change.clone()}
+                                            on_connected_change={on_connected_change.clone()}
                                             on_message_sent={on_message_sent.clone()}
                                         />
                                     </div>
@@ -428,6 +513,35 @@ pub fn dashboard_page() -> Html {
                     </div>
                 </>
             }
+
+            // Delete confirmation modal
+            {
+                if let Some(session_id) = *pending_delete {
+                    let session_name = sessions.iter()
+                        .find(|s| s.id == session_id)
+                        .map(|s| {
+                            let (project, hostname) = get_session_display_parts(s);
+                            project.unwrap_or(hostname)
+                        })
+                        .unwrap_or_else(|| "this session".to_string());
+
+                    html! {
+                        <div class="modal-overlay" onclick={on_cancel_delete.clone()}>
+                            <div class="modal-content" onclick={Callback::from(|e: MouseEvent| e.stop_propagation())}>
+                                <h2>{ "Delete Session?" }</h2>
+                                <p>{ format!("Are you sure you want to delete \"{}\"?", session_name) }</p>
+                                <p class="modal-warning">{ "This action cannot be undone." }</p>
+                                <div class="modal-actions">
+                                    <button class="modal-cancel" onclick={on_cancel_delete.clone()}>{ "Cancel" }</button>
+                                    <button class="modal-confirm" onclick={on_confirm_delete.clone()}>{ "Delete" }</button>
+                                </div>
+                            </div>
+                        </div>
+                    }
+                } else {
+                    html! {}
+                }
+            }
         </div>
     }
 }
@@ -442,6 +556,8 @@ struct SessionRailProps {
     focused_index: usize,
     awaiting_sessions: HashSet<Uuid>,
     parked_sessions: HashSet<Uuid>,
+    session_costs: HashMap<Uuid, f64>,
+    connected_sessions: HashSet<Uuid>,
     on_select: Callback<usize>,
     on_delete: Callback<Uuid>,
     on_toggle_park: Callback<Uuid>,
@@ -473,6 +589,8 @@ fn session_rail(props: &SessionRailProps) -> Html {
                     let is_focused = index == props.focused_index;
                     let is_awaiting = props.awaiting_sessions.contains(&session.id);
                     let is_parked = props.parked_sessions.contains(&session.id);
+                    let is_connected = props.connected_sessions.contains(&session.id);
+                    let cost = props.session_costs.get(&session.id).copied().unwrap_or(0.0);
 
                     let on_click = {
                         let on_select = props.on_select.clone();
@@ -504,12 +622,34 @@ fn session_rail(props: &SessionRailProps) -> Html {
                         if is_parked { Some("parked") } else { None },
                     );
 
+                    let (project, hostname) = get_session_display_parts(session);
+                    let project_display = project.unwrap_or_else(|| hostname.clone());
+                    let show_hostname = session.working_directory.is_some();
+
+                    let connection_class = if is_connected { "pill-status connected" } else { "pill-status disconnected" };
+
                     html! {
                         <div class={pill_class} onclick={on_click}>
-                            <span class="pill-indicator">
-                                { if is_awaiting { "●" } else { "○" } }
+                            <span class={connection_class}>
+                                { if is_connected { "●" } else { "○" } }
                             </span>
-                            <span class="pill-name">{ &session.session_name }</span>
+                            <span class="pill-name" title={session.session_name.clone()}>
+                                <span class="pill-project">{ project_display }</span>
+                                {
+                                    if show_hostname {
+                                        html! { <span class="pill-hostname">{ hostname }</span> }
+                                    } else {
+                                        html! {}
+                                    }
+                                }
+                            </span>
+                            {
+                                if cost > 0.0 {
+                                    html! { <span class="pill-cost">{ format!("${:.2}", cost) }</span> }
+                                } else {
+                                    html! {}
+                                }
+                            }
                             {
                                 if is_parked {
                                     html! { <span class="pill-parked-badge">{ "ᴾ" }</span> }
@@ -542,6 +682,8 @@ pub struct SessionViewProps {
     pub session: SessionInfo,
     pub focused: bool,
     pub on_awaiting_change: Callback<(Uuid, bool)>,
+    pub on_cost_change: Callback<(Uuid, f64)>,
+    pub on_connected_change: Callback<(Uuid, bool)>,
     pub on_message_sent: Callback<Uuid>,
 }
 
@@ -848,6 +990,12 @@ impl Component for SessionView {
                                 self.total_cost += cost;
                                 self.cost_flash = true;
 
+                                // Emit cost change to parent
+                                let session_id = ctx.props().session.id;
+                                ctx.props()
+                                    .on_cost_change
+                                    .emit((session_id, self.total_cost));
+
                                 // Clear flash after animation
                                 let link = ctx.link().clone();
                                 spawn_local(async move {
@@ -1019,6 +1167,8 @@ impl Component for SessionView {
             SessionViewMsg::WebSocketConnected(sender) => {
                 self.ws_connected = true;
                 self.ws_sender = Some(sender);
+                let session_id = ctx.props().session.id;
+                ctx.props().on_connected_change.emit((session_id, true));
                 true
             }
             SessionViewMsg::WebSocketError(err) => {
@@ -1028,6 +1178,8 @@ impl Component for SessionView {
                 });
                 self.messages.push(error_msg.to_string());
                 self.ws_connected = false;
+                let session_id = ctx.props().session.id;
+                ctx.props().on_connected_change.emit((session_id, false));
                 true
             }
             SessionViewMsg::CheckAwaiting => {
@@ -1053,7 +1205,6 @@ impl Component for SessionView {
 
     fn view(&self, ctx: &Context<Self>) -> Html {
         let link = ctx.link();
-        let session = &ctx.props().session;
 
         let handle_submit = link.callback(|e: SubmitEvent| {
             e.prevent_default();
@@ -1067,32 +1218,6 @@ impl Component for SessionView {
 
         html! {
             <div class="session-view">
-                <div class="session-view-header">
-                    <span class="session-name">{ &session.session_name }</span>
-                    {
-                        if let Some(dir) = &session.working_directory {
-                            html! { <span class="session-path">{ dir }</span> }
-                        } else {
-                            html! {}
-                        }
-                    }
-                    {
-                        if self.total_cost > 0.0 {
-                            let cost_class = if self.cost_flash { "session-cost flash" } else { "session-cost" };
-                            html! {
-                                <span class={cost_class}>
-                                    { format_cost(self.total_cost) }
-                                </span>
-                            }
-                        } else {
-                            html! {}
-                        }
-                    }
-                    <span class={if self.ws_connected { "status connected" } else { "status disconnected" }}>
-                        { if self.ws_connected { "● Connected" } else { "○ Disconnected" } }
-                    </span>
-                </div>
-
                 <div class="session-view-messages" ref={self.messages_ref.clone()}>
                     {
                         self.messages.iter().map(|json| {
@@ -1205,16 +1330,6 @@ impl Component for SessionView {
                 </form>
             </div>
         }
-    }
-}
-
-fn format_cost(cost: f64) -> String {
-    if cost < 0.01 {
-        format!("${:.4}", cost)
-    } else if cost < 1.0 {
-        format!("${:.3}", cost)
-    } else {
-        format!("${:.2}", cost)
     }
 }
 

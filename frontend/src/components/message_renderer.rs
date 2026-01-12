@@ -213,26 +213,15 @@ fn render_error_message(msg: &ErrorMessage) -> Html {
 fn render_system_message(msg: &SystemMessage) -> Html {
     let subtype = msg.subtype.as_deref().unwrap_or("system");
 
-    // For init messages, show a compact one-liner
+    // Hide init messages - they're not informative to users
     if subtype == "init" {
-        let model_short = msg
-            .model
-            .as_ref()
-            .and_then(|m| shorten_model_name(m))
-            .unwrap_or_else(|| "unknown".to_string());
+        return html! {};
+    }
 
-        html! {
-            <div class="claude-message system-message compact">
-                <span class="message-type-badge system">{ "init" }</span>
-                <span class="model-name">{ model_short }</span>
-            </div>
-        }
-    } else {
-        html! {
-            <div class="claude-message system-message compact">
-                <span class="message-type-badge system">{ subtype }</span>
-            </div>
-        }
+    html! {
+        <div class="claude-message system-message compact">
+            <span class="message-type-badge system">{ subtype }</span>
+        </div>
     }
 }
 
