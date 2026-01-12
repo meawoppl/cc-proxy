@@ -106,6 +106,20 @@ struct Args {
     #[arg(long)]
     no_update: bool,
 
+    /// Check for updates without installing.
+    ///
+    /// Checks if a newer version is available from GitHub releases
+    /// and prints information about it without auto-updating.
+    #[arg(long)]
+    check_update: bool,
+
+    /// Force update from GitHub releases.
+    ///
+    /// Downloads and installs the latest version from GitHub releases,
+    /// bypassing the backend server.
+    #[arg(long)]
+    update: bool,
+
     /// Arguments to pass through to the claude CLI.
     ///
     /// Everything after -- or unrecognized flags are forwarded to claude.
@@ -122,6 +136,58 @@ fn default_session_name() -> String {
     format!("{}-{}", hostname, timestamp)
 }
 
+/// Handle --check-update: check for updates without installing
+fn handle_check_update() -> Result<()> {
+    ui::print_checking_for_updates();
+
+    match update::check_for_update_github(true) {
+        Ok(update::UpdateResult::UpToDate) => {
+            ui::print_up_to_date();
+            Ok(())
+        }
+        Ok(update::UpdateResult::UpdateAvailable {
+            version,
+            download_url,
+        }) => {
+            ui::print_update_available(&version, &download_url);
+            Ok(())
+        }
+        Ok(update::UpdateResult::Updated) => {
+            // Shouldn't happen with check_only=true
+            ui::print_update_complete();
+            Ok(())
+        }
+        Err(e) => {
+            ui::print_update_check_failed(&e.to_string());
+            Err(e)
+        }
+    }
+}
+
+/// Handle --update: force update from GitHub releases
+fn handle_force_update() -> Result<()> {
+    ui::print_updating_from_github();
+
+    match update::check_for_update_github(false) {
+        Ok(update::UpdateResult::UpToDate) => {
+            ui::print_up_to_date();
+            Ok(())
+        }
+        Ok(update::UpdateResult::Updated) => {
+            ui::print_update_complete();
+            Ok(())
+        }
+        Ok(update::UpdateResult::UpdateAvailable { .. }) => {
+            // Shouldn't happen with check_only=false
+            Ok(())
+        }
+        Err(e) => {
+            ui::print_update_failed(&e.to_string());
+            Err(e)
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
@@ -134,23 +200,41 @@ async fn main() -> Result<()> {
 
     let args = Args::parse();
 
+    // Check for and apply pending updates (Windows only)
+    // This handles the case where an update was downloaded but couldn't be
+    // applied because the binary was locked
+    if let Ok(true) = update::apply_pending_update() {
+        ui::print_pending_update_applied();
+    }
+
+    // Handle explicit update commands first
+    if args.check_update {
+        return handle_check_update();
+    }
+
+    if args.update {
+        return handle_force_update();
+    }
+
     // Check for updates before anything else (unless --no-update or --init/--logout)
     if !args.no_update && args.init.is_none() && !args.logout {
-        if let Some(backend_url) = update::get_update_backend_url() {
-            match update::check_for_update(&backend_url) {
-                Ok(update::UpdateResult::UpToDate) => {
-                    // Continue normally
-                }
-                Ok(update::UpdateResult::Updated) => {
-                    ui::print_update_complete();
-                    std::process::exit(0);
-                }
-                Err(e) => {
-                    warn!(
-                        "Update check failed: {}. Continuing with current version.",
-                        e
-                    );
-                }
+        let backend_url = update::get_update_backend_url();
+        match update::check_for_update_with_fallback(backend_url.as_deref(), false) {
+            Ok(update::UpdateResult::UpToDate) => {
+                // Continue normally
+            }
+            Ok(update::UpdateResult::Updated) => {
+                ui::print_update_complete();
+                std::process::exit(0);
+            }
+            Ok(update::UpdateResult::UpdateAvailable { .. }) => {
+                // Shouldn't happen since check_only=false, but handle gracefully
+            }
+            Err(e) => {
+                warn!(
+                    "Update check failed: {}. Continuing with current version.",
+                    e
+                );
             }
         }
     }

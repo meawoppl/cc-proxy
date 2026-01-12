@@ -212,3 +212,87 @@ pub fn print_update_complete() {
     println!("  Please run the command again to use the updated version.");
     println!();
 }
+
+/// Print checking for updates message
+pub fn print_checking_for_updates() {
+    println!();
+    println!(
+        "  {} Checking for updates from GitHub...",
+        "→".bright_blue()
+    );
+}
+
+/// Print up to date message
+pub fn print_up_to_date() {
+    println!(
+        "  {} {} is up to date.",
+        "✓".bright_green(),
+        "claude-proxy".bright_cyan()
+    );
+    println!();
+}
+
+/// Print update available message
+pub fn print_update_available(version: &str, download_url: &str) {
+    println!();
+    println!(
+        "{}",
+        "╭──────────────────────────────────────╮".bright_yellow()
+    );
+    println!(
+        "{}",
+        "│         Update Available             │".bright_yellow()
+    );
+    println!(
+        "{}",
+        "╰──────────────────────────────────────╯".bright_yellow()
+    );
+    println!();
+    println!("  {} {}", "Version:".dimmed(), version.bright_white());
+    println!();
+    println!("  To update, run:");
+    println!(
+        "    {} {}",
+        "$".dimmed(),
+        "claude-proxy --update".bright_cyan()
+    );
+    println!();
+    println!("  Or download manually from:");
+    println!("    {}", download_url.bright_blue());
+    println!();
+}
+
+/// Print update check failed message
+pub fn print_update_check_failed(error: &str) {
+    println!(
+        "  {} Failed to check for updates: {}",
+        "✗".bright_red(),
+        error
+    );
+    println!();
+}
+
+/// Print updating from GitHub message
+pub fn print_updating_from_github() {
+    println!();
+    println!(
+        "  {} Downloading latest version from GitHub...",
+        "→".bright_blue()
+    );
+}
+
+/// Print update failed message
+pub fn print_update_failed(error: &str) {
+    println!();
+    println!("  {} Update failed: {}", "✗".bright_red(), error);
+    println!();
+}
+
+/// Print pending update applied message (Windows)
+pub fn print_pending_update_applied() {
+    println!();
+    println!(
+        "  {} Pending update applied successfully.",
+        "✓".bright_green()
+    );
+}
