@@ -185,7 +185,7 @@ fn resolve_binary_path(dev_mode: bool) -> Result<std::path::PathBuf, (StatusCode
         } else {
             Err((
                 StatusCode::NOT_FOUND,
-                "Proxy binary not found. Run 'cargo build -p proxy --release' first.".to_string(),
+                "Proxy binary not found. Run 'cargo build -p claude-proxy --release' first.".to_string(),
             ))
         }
     } else {

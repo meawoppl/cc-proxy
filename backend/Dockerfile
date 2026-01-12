@@ -29,7 +29,7 @@ COPY proxy ./proxy
 RUN sed -i 's/, "cli-tools"//' Cargo.toml
 
 # Build release binaries (backend and proxy)
-RUN cargo build --release -p backend -p proxy
+RUN cargo build --release -p backend -p claude-proxy
 
 # -----------------------------------------------------------------------------
 # Stage 2: Runtime

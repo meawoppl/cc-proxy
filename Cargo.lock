@@ -519,6 +519,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "claude-proxy"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "clap",
+ "claude-codes",
+ "colored",
+ "directories",
+ "dotenvy",
+ "futures-util",
+ "hex",
+ "hostname",
+ "libc",
+ "reqwest 0.12.4",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "shared",
+ "thiserror 2.0.17",
+ "tokio",
+ "tokio-tungstenite",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "uuid",
+]
+
+[[package]]
 name = "colorchoice"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2513,36 +2543,6 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "wasm-bindgen-futures",
-]
-
-[[package]]
-name = "proxy"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "chrono",
- "clap",
- "claude-codes",
- "colored",
- "directories",
- "dotenvy",
- "futures-util",
- "hex",
- "hostname",
- "libc",
- "reqwest 0.12.4",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "shared",
- "thiserror 2.0.17",
- "tokio",
- "tokio-tungstenite",
- "tokio-util",
- "tracing",
- "tracing-subscriber",
- "url",
- "uuid",
 ]
 
 [[package]]
