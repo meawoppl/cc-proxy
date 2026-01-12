@@ -37,11 +37,11 @@ Pre-built binaries for all platforms are available from [GitHub Releases](https:
 ```mermaid
 flowchart TB
     subgraph dev["Dev Machine"]
-        proxy["claude-proxy binary"]
-        codes["claude-codes crate"]
-        claude["claude CLI binary"]
-        proxy --> codes
-        codes --> claude
+        subgraph proxy["claude-proxy binary"]
+            subgraph codes["claude-codes crate"]
+                claude["claude CLI binary"]
+            end
+        end
     end
 
     subgraph server["Backend Server"]
