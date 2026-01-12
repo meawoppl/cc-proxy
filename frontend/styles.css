@@ -61,20 +61,41 @@ body {
 
 .terminal-header {
     background: var(--border);
-    padding: 0.5rem;
+    padding: 0.4rem 0.75rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.terminal-title {
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+    font-weight: 500;
+}
+
+.terminal-buttons {
     display: flex;
     gap: 0.5rem;
 }
 
-.terminal-dot {
-    width: 12px;
-    height: 12px;
-    border-radius: 50%;
+.terminal-btn {
+    width: 20px;
+    height: 20px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 4px;
+    color: var(--text-secondary);
+    font-size: 14px;
+    line-height: 1;
+    cursor: default;
 }
 
-.terminal-dot.red { background: var(--error); }
-.terminal-dot.yellow { background: #e0af68; }
-.terminal-dot.green { background: var(--success); }
+.terminal-btn.close:hover {
+    background: var(--error);
+    color: white;
+}
 
 .terminal-body {
     padding: 1rem;
@@ -1774,36 +1795,70 @@ body {
 }
 
 .pill-name {
-    font-size: 0.85rem;
-    color: var(--text-primary);
+    display: flex;
+    flex-direction: column;
     max-width: 200px;
     overflow: hidden;
-    text-overflow: ellipsis;
+}
+
+.pill-project {
+    font-size: 0.85rem;
+    color: var(--text-primary);
+    font-weight: 500;
     white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.pill-hostname {
+    font-size: 0.7rem;
+    color: var(--text-secondary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.pill-status {
+    font-size: 0.6rem;
+    line-height: 1;
+}
+
+.pill-status.connected {
+    color: var(--success);
+}
+
+.pill-status.disconnected {
+    color: var(--text-secondary);
+}
+
+.pill-cost {
+    font-size: 0.7rem;
+    font-family: monospace;
+    color: var(--success);
+    padding: 0.1rem 0.3rem;
+    background: rgba(158, 206, 106, 0.15);
+    border-radius: 3px;
 }
 
 .pill-delete {
-    width: 18px;
-    height: 18px;
-    border: none;
-    background: transparent;
-    color: var(--text-secondary);
-    font-size: 14px;
+    width: 24px;
+    height: 24px;
+    border: 1px solid var(--border);
+    background: rgba(247, 118, 142, 0.1);
+    color: var(--error);
+    font-size: 16px;
+    font-weight: 600;
     cursor: pointer;
-    border-radius: 50%;
-    opacity: 0;
+    border-radius: 4px;
     transition: all 0.2s;
     display: flex;
     align-items: center;
     justify-content: center;
 }
 
-.session-pill:hover .pill-delete {
-    opacity: 1;
-}
-
 .pill-delete:hover {
     background: var(--error);
+    border-color: var(--error);
     color: white;
 }
 
@@ -1828,37 +1883,35 @@ body {
 }
 
 .pill-park {
-    width: 18px;
-    height: 18px;
-    border: none;
-    background: transparent;
+    width: 24px;
+    height: 24px;
+    border: 1px solid var(--border);
+    background: rgba(122, 162, 247, 0.1);
     color: var(--text-secondary);
-    font-size: 10px;
+    font-size: 12px;
     cursor: pointer;
-    border-radius: 50%;
-    opacity: 0;
+    border-radius: 4px;
     transition: all 0.2s;
     display: flex;
     align-items: center;
     justify-content: center;
 }
 
-.session-pill:hover .pill-park {
-    opacity: 1;
-}
-
 .pill-park:hover {
-    background: rgba(122, 162, 247, 0.2);
+    background: rgba(122, 162, 247, 0.3);
+    border-color: var(--accent);
     color: var(--accent);
 }
 
 .pill-park.active {
-    opacity: 1;
+    background: rgba(122, 162, 247, 0.2);
+    border-color: var(--accent);
     color: var(--accent);
 }
 
 .pill-park.active:hover {
     background: rgba(158, 206, 106, 0.2);
+    border-color: var(--success);
     color: var(--success);
 }
 
@@ -1922,6 +1975,12 @@ body {
     font-size: 1rem;
     font-weight: 500;
     color: var(--text-primary);
+}
+
+.session-view-header .session-hostname {
+    font-size: 0.85rem;
+    font-weight: 400;
+    color: var(--text-secondary);
 }
 
 .session-view-header .session-path {
@@ -2218,4 +2277,103 @@ body {
     padding: 0.15rem 0.4rem;
     font-family: monospace;
     font-size: 0.7rem;
+}
+
+/* ==========================================================================
+   Delete Confirmation Modal
+   ========================================================================== */
+
+.modal-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.7);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+    animation: fadeIn 0.15s ease-out;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+.modal-content {
+    background: var(--bg-darker);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1.5rem;
+    max-width: 400px;
+    width: 90%;
+    animation: slideIn 0.15s ease-out;
+}
+
+@keyframes slideIn {
+    from {
+        opacity: 0;
+        transform: translateY(-20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.modal-content h2 {
+    font-size: 1.25rem;
+    margin-bottom: 1rem;
+    color: var(--text-primary);
+}
+
+.modal-content p {
+    color: var(--text-secondary);
+    margin-bottom: 0.5rem;
+}
+
+.modal-content .modal-warning {
+    color: var(--error);
+    font-size: 0.85rem;
+    margin-bottom: 1.5rem;
+}
+
+.modal-actions {
+    display: flex;
+    gap: 1rem;
+    justify-content: flex-end;
+}
+
+.modal-cancel {
+    padding: 0.5rem 1rem;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text-primary);
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.9rem;
+    transition: all 0.2s;
+}
+
+.modal-cancel:hover {
+    background: rgba(255, 255, 255, 0.1);
+}
+
+.modal-confirm {
+    padding: 0.5rem 1rem;
+    border: 1px solid var(--error);
+    background: var(--error);
+    color: white;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.9rem;
+    font-weight: 500;
+    transition: all 0.2s;
+}
+
+.modal-confirm:hover {
+    background: #ff5a72;
+    border-color: #ff5a72;
 }

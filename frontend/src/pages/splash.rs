@@ -26,9 +26,12 @@ pub fn splash_page() -> Html {
                 <div class="splash-hero">
                     <div class="terminal-preview">
                         <div class="terminal-header">
-                            <span class="terminal-dot red"></span>
-                            <span class="terminal-dot yellow"></span>
-                            <span class="terminal-dot green"></span>
+                            <span class="terminal-title">{ "Terminal" }</span>
+                            <div class="terminal-buttons">
+                                <span class="terminal-btn minimize">{ "−" }</span>
+                                <span class="terminal-btn maximize">{ "□" }</span>
+                                <span class="terminal-btn close">{ "×" }</span>
+                            </div>
                         </div>
                         <div class="terminal-body">
                             <div class="terminal-line">
@@ -57,6 +60,10 @@ pub fn splash_page() -> Html {
                     <div class="feature">
                         <h3>{ "🔄 Multiple Sessions" }</h3>
                         <p>{ "Manage and switch between multiple Claude Code sessions" }</p>
+                    </div>
+                    <div class="feature">
+                        <h3>{ "🚀 Fire & Forget" }</h3>
+                        <p>{ "Start Claude tasks and walk away. Check results later from any device" }</p>
                     </div>
                     <div class="feature">
                         <h3>{ "🔒 Secure" }</h3>
