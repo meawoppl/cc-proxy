@@ -269,7 +269,7 @@ pub enum ProxyMessage {
 
 # Individual components
 cargo build -p backend        # Build backend
-cargo build -p proxy          # Build proxy
+cargo build -p claude-proxy   # Build proxy CLI
 cd frontend && trunk build    # Build frontend (WASM)
 
 # Testing
@@ -326,7 +326,7 @@ trunk serve  # Auto-reload on changes
 
 **Terminal 4 - Proxy** (optional):
 ```bash
-cargo run -p proxy -- --backend-url ws://localhost:3000
+cargo run -p claude-proxy -- --backend-url ws://localhost:3000
 ```
 
 ## Important Constraints

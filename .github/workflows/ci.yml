@@ -59,7 +59,7 @@ jobs:
           shared-key: "backend"
 
       - name: Build backend
-        run: cargo build -p backend -p proxy -p shared
+        run: cargo build -p backend -p claude-proxy -p shared
 
   build-frontend:
     name: Build Frontend (WASM)
