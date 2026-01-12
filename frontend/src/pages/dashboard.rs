@@ -983,19 +983,17 @@ impl Component for SessionView {
                 true
             }
             SessionViewMsg::ReceivedOutput(output) => {
-                // Extract cost from result messages
+                // Extract cost from result messages (total_cost_usd is cumulative, not incremental)
                 if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&output) {
                     if parsed.get("type").and_then(|t| t.as_str()) == Some("result") {
                         if let Some(cost) = parsed.get("total_cost_usd").and_then(|c| c.as_f64()) {
-                            if cost > 0.0 {
-                                self.total_cost += cost;
+                            if cost != self.total_cost {
+                                self.total_cost = cost;
                                 self.cost_flash = true;
 
                                 // Emit cost change to parent
                                 let session_id = ctx.props().session.id;
-                                ctx.props()
-                                    .on_cost_change
-                                    .emit((session_id, self.total_cost));
+                                ctx.props().on_cost_change.emit((session_id, cost));
 
                                 // Clear flash after animation
                                 let link = ctx.link().clone();
