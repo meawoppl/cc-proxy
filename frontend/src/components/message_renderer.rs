@@ -1252,11 +1252,12 @@ fn format_duration(ms: u64) -> String {
     }
 }
 
-/// Represents a segment of text that may or may not be a URL
+/// Represents a segment of text that may be plain text, a URL, or formatted
 #[derive(Debug, Clone, PartialEq)]
 pub enum TextSegment {
     Text(String),
     Url(String),
+    Bold(String),
 }
 
 /// Characters that can appear in a URL path/query but shouldn't end a URL
@@ -1476,6 +1477,12 @@ fn merge_text_segments(segments: Vec<TextSegment>) -> Vec<TextSegment> {
                 }
                 result.push(TextSegment::Url(u));
             }
+            TextSegment::Bold(b) => {
+                if !current_text.is_empty() {
+                    result.push(TextSegment::Text(std::mem::take(&mut current_text)));
+                }
+                result.push(TextSegment::Bold(b));
+            }
         }
     }
 
@@ -1486,9 +1493,58 @@ fn merge_text_segments(segments: Vec<TextSegment>) -> Vec<TextSegment> {
     result
 }
 
-/// Render text with URLs converted to clickable links
+/// Parse **bold** markdown in text segments
+fn parse_bold(segments: Vec<TextSegment>) -> Vec<TextSegment> {
+    let mut result = Vec::new();
+
+    for segment in segments {
+        match segment {
+            TextSegment::Text(text) => {
+                // Parse bold markers in plain text
+                let mut remaining = text.as_str();
+                while !remaining.is_empty() {
+                    if let Some(start) = remaining.find("**") {
+                        // Add text before the bold marker
+                        if start > 0 {
+                            result.push(TextSegment::Text(remaining[..start].to_string()));
+                        }
+
+                        // Find the closing **
+                        let after_start = &remaining[start + 2..];
+                        if let Some(end) = after_start.find("**") {
+                            // Found complete bold segment
+                            let bold_text = &after_start[..end];
+                            if !bold_text.is_empty() && !bold_text.contains('\n') {
+                                result.push(TextSegment::Bold(bold_text.to_string()));
+                            } else {
+                                // Empty or multiline bold, treat as text
+                                result.push(TextSegment::Text(format!("**{}**", bold_text)));
+                            }
+                            remaining = &after_start[end + 2..];
+                        } else {
+                            // No closing **, treat as regular text
+                            result.push(TextSegment::Text(remaining.to_string()));
+                            break;
+                        }
+                    } else {
+                        // No more bold markers
+                        result.push(TextSegment::Text(remaining.to_string()));
+                        break;
+                    }
+                }
+            }
+            // Preserve URL and Bold segments as-is
+            other => result.push(other),
+        }
+    }
+
+    result
+}
+
+/// Render text with URLs converted to clickable links and **bold** formatting
 pub fn linkify_text(text: &str) -> Html {
     let segments = parse_urls(text);
+    let segments = parse_bold(segments);
 
     html! {
         <>
@@ -1500,6 +1556,9 @@ pub fn linkify_text(text: &str) -> Html {
                             <a href={url.clone()} target="_blank" rel="noopener noreferrer" class="message-link">
                                 { &url }
                             </a>
+                        },
+                        TextSegment::Bold(t) => html! {
+                            <strong class="message-bold">{ t }</strong>
                         },
                     }
                 }).collect::<Html>()
