@@ -94,7 +94,10 @@ async fn main() -> Result<()> {
                     std::process::exit(0);
                 }
                 Err(e) => {
-                    warn!("Update check failed: {}. Continuing with current version.", e);
+                    warn!(
+                        "Update check failed: {}. Continuing with current version.",
+                        e
+                    );
                 }
             }
         }

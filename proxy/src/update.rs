@@ -64,10 +64,7 @@ pub fn check_for_update(backend_url: &str) -> Result<UpdateResult> {
         .context("Failed to check for updates")?;
 
     if !resp.status().is_success() {
-        bail!(
-            "Update check failed: server returned {}",
-            resp.status()
-        );
+        bail!("Update check failed: server returned {}", resp.status());
     }
 
     let remote_hash = resp
