@@ -2313,6 +2313,10 @@ body {
     background: rgba(255, 255, 255, 0.05);
 }
 
+.permission-option:active {
+    background: rgba(255, 255, 255, 0.1);
+}
+
 .permission-option .option-cursor {
     color: var(--accent-color);
     font-weight: bold;
