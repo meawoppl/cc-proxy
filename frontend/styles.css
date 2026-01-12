@@ -783,6 +783,15 @@ body {
     background: #e0af68;
 }
 
+.setup-notes .note.warning-note {
+    background: rgba(247, 118, 142, 0.15);
+    border: 1px solid rgba(247, 118, 142, 0.3);
+}
+
+.setup-notes .note.warning-note .note-icon {
+    background: #f7768e;
+}
+
 .setup-notes code {
     background: var(--bg-dark);
     padding: 0.15rem 0.4rem;

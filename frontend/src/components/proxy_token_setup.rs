@@ -200,11 +200,30 @@ pub fn proxy_token_setup() -> Html {
                         </p>
                         {if *selected_platform == Platform::Windows {
                             html! {
-                                <p class="note windows-note">
+                                <>
+                                    <p class="note warning-note">
+                                        <span class="note-icon">{ "!" }</span>
+                                        { "Windows support is experimental and largely untested. " }
+                                        <a href="https://github.com/meawoppl/cc-proxy/issues" target="_blank">
+                                            { "Please report issues!" }
+                                        </a>
+                                    </p>
+                                    <p class="note windows-note">
+                                        <span class="note-icon">{ "!" }</span>
+                                        { "Download Windows binary from " }
+                                        <a href="https://github.com/meawoppl/cc-proxy/releases/latest" target="_blank">
+                                            { "GitHub releases" }
+                                        </a>
+                                    </p>
+                                </>
+                            }
+                        } else if *selected_platform == Platform::MacOS {
+                            html! {
+                                <p class="note warning-note">
                                     <span class="note-icon">{ "!" }</span>
-                                    { "Download Windows binary from " }
-                                    <a href="https://github.com/meawoppl/cc-proxy/releases/latest" target="_blank">
-                                        { "GitHub releases" }
+                                    { "macOS support is experimental and largely untested. " }
+                                    <a href="https://github.com/meawoppl/cc-proxy/issues" target="_blank">
+                                        { "Please report issues!" }
                                     </a>
                                 </p>
                             }
