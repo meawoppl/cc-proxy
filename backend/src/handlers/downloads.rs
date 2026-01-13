@@ -73,10 +73,9 @@ echo ""
 
 # Check if binary already exists
 if [ -x "${{BIN_PATH}}" ]; then
-    echo "claude-proxy is already installed at: ${{BIN_PATH}}"
+    echo "claude-proxy found at: ${{BIN_PATH}}"
+    echo "Updating to latest version..."
     echo ""
-{init_section}
-    exit 0
 fi
 
 # Create config directory
@@ -130,19 +129,23 @@ echo "Binary: ${{BINARY_NAME}}"
 echo "Installing to: ${{BIN_PATH}}"
 echo ""
 
-# Download the binary
+# Download the binary to a temp file first (allows replacing running binary)
+TEMP_BIN="${{BIN_PATH}}.new.$$"
 echo "Downloading claude-proxy from GitHub releases..."
 if command -v curl &> /dev/null; then
-    curl -fsSL "${{DOWNLOAD_URL}}" -o "${{BIN_PATH}}"
+    curl -fsSL "${{DOWNLOAD_URL}}" -o "${{TEMP_BIN}}"
 elif command -v wget &> /dev/null; then
-    wget -q "${{DOWNLOAD_URL}}" -O "${{BIN_PATH}}"
+    wget -q "${{DOWNLOAD_URL}}" -O "${{TEMP_BIN}}"
 else
     echo "Error: curl or wget required"
     exit 1
 fi
 
 # Make executable
-chmod +x "${{BIN_PATH}}"
+chmod +x "${{TEMP_BIN}}"
+
+# Atomic replace (works even if binary is running)
+mv -f "${{TEMP_BIN}}" "${{BIN_PATH}}"
 
 # macOS: Remove quarantine attribute if present
 if [ "${{OS}}" = "Darwin" ]; then
