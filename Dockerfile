@@ -1,6 +1,5 @@
 # =============================================================================
 # Multi-stage Dockerfile for CC-Proxy Backend
-# Uses 1Password CLI for secret injection at runtime
 # Downloads pre-built claude-proxy binary from GitHub releases
 # =============================================================================
 
@@ -39,24 +38,14 @@ FROM debian:bookworm-slim
 
 WORKDIR /app
 
-# Install runtime dependencies and 1Password CLI
+# Install runtime dependencies
 RUN apt-get update && \
     apt-get install -y \
     ca-certificates \
     libpq5 \
     libssl3 \
     curl \
-    gnupg \
     && rm -rf /var/lib/apt/lists/*
-
-# Install 1Password CLI
-RUN curl -sS https://downloads.1password.com/linux/keys/1password.asc | \
-    gpg --dearmor --output /usr/share/keyrings/1password-archive-keyring.gpg && \
-    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/1password-archive-keyring.gpg] https://downloads.1password.com/linux/debian/$(dpkg --print-architecture) stable main" | \
-    tee /etc/apt/sources.list.d/1password.list && \
-    apt-get update && \
-    apt-get install -y 1password-cli && \
-    rm -rf /var/lib/apt/lists/*
 
 # Copy backend binary from builder
 COPY --from=builder /app/target/release/backend /app/backend
@@ -67,9 +56,6 @@ RUN mkdir -p /app/bin && \
     curl -fsSL https://github.com/meawoppl/cc-proxy/releases/download/latest/claude-proxy-linux-x86_64 \
     -o /app/bin/claude-proxy && \
     chmod +x /app/bin/claude-proxy
-
-# Copy .env template with 1Password references
-COPY .env.example /app/.env
 
 # Copy pre-built frontend dist (built locally with trunk)
 COPY frontend/dist /app/frontend/dist
@@ -90,7 +76,5 @@ EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:3000/ || exit 1
 
-# Use 1Password CLI to inject secrets and run the backend
-# Note: Requires 1Password Connect or Service Account token at runtime
-ENTRYPOINT ["op", "run", "--env-file=/app/.env", "--"]
+# Run the backend (expects environment variables to be passed in)
 CMD ["/app/backend"]
