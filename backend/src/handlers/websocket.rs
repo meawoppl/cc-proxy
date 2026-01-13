@@ -109,7 +109,8 @@ async fn handle_session_socket(socket: WebSocket, app_state: Arc<AppState>) {
                             session_name,
                             auth_token,
                             working_directory,
-                            resuming,
+                            resuming: _,
+                            force_new,
                         } => {
                             // Use session_id as the key for in-memory tracking
                             let key = claude_session_id.to_string();
@@ -118,118 +119,147 @@ async fn handle_session_socket(socket: WebSocket, app_state: Arc<AppState>) {
                             // Register in memory
                             session_manager.register_session(key.clone(), tx.clone());
 
+                            // Track registration result for RegisterAck
+                            let mut registration_success = false;
+                            let mut registration_error: Option<String> = None;
+
                             // Persist to database
                             if let Ok(mut conn) = db_pool.get() {
                                 use crate::schema::sessions;
 
-                                // Look up by the Claude session ID (which is now our primary key)
-                                let existing: Option<crate::models::Session> = sessions::table
-                                    .find(claude_session_id)
-                                    .first(&mut conn)
-                                    .optional()
-                                    .unwrap_or(None);
+                                let user_id =
+                                    get_user_id_from_token(&app_state, auth_token.as_deref());
+
+                                // Look up existing session by ID first
+                                let existing_by_id: Option<crate::models::Session> =
+                                    sessions::table
+                                        .find(claude_session_id)
+                                        .first(&mut conn)
+                                        .optional()
+                                        .unwrap_or(None);
+
+                                // If not found by ID, check by working_directory (one session per directory)
+                                // This prevents duplicate sessions when session ID changes
+                                // Skip directory lookup if force_new is set (user wants a fresh session)
+                                let existing_by_dir: Option<crate::models::Session> = if !force_new
+                                    && existing_by_id.is_none()
+                                    && !working_directory.is_empty()
+                                {
+                                    if let Some(uid) = user_id {
+                                        sessions::table
+                                            .filter(sessions::user_id.eq(uid))
+                                            .filter(
+                                                sessions::working_directory.eq(&working_directory),
+                                            )
+                                            .first(&mut conn)
+                                            .optional()
+                                            .unwrap_or(None)
+                                    } else {
+                                        None
+                                    }
+                                } else {
+                                    None
+                                };
+
+                                let found_by_dir = existing_by_dir.is_some();
+                                let existing = existing_by_id.or(existing_by_dir);
 
                                 if let Some(existing_session) = existing {
                                     // Update existing session to active
-                                    let _ =
-                                        diesel::update(sessions::table.find(existing_session.id))
-                                            .set((
-                                                sessions::status.eq("active"),
-                                                sessions::last_activity.eq(diesel::dsl::now),
-                                                sessions::working_directory.eq(
-                                                    if working_directory.is_empty() {
-                                                        None
-                                                    } else {
-                                                        Some(&working_directory)
-                                                    },
-                                                ),
-                                            ))
-                                            .execute(&mut conn);
-                                    db_session_id = Some(existing_session.id);
-                                    info!(
-                                        "Session reactivated in DB: {} ({})",
-                                        session_name, claude_session_id
-                                    );
-                                } else if resuming {
-                                    // Trying to resume but session doesn't exist in DB
-                                    // This can happen if the session was deleted or is on a different backend
-                                    warn!("Resuming session {} but not found in DB, creating new entry", claude_session_id);
-
-                                    let user_id =
-                                        get_user_id_from_token(&app_state, auth_token.as_deref());
-                                    if let Some(user_id) = user_id {
-                                        let new_session = NewSessionWithId {
-                                            id: claude_session_id,
-                                            user_id,
-                                            session_name: session_name.clone(),
-                                            session_key: key.clone(),
-                                            working_directory: if working_directory.is_empty() {
-                                                None
-                                            } else {
-                                                Some(working_directory.clone())
-                                            },
-                                            status: "active".to_string(),
-                                        };
-
-                                        match diesel::insert_into(sessions::table)
-                                            .values(&new_session)
-                                            .get_result::<crate::models::Session>(&mut conn)
-                                        {
-                                            Ok(session) => {
-                                                db_session_id = Some(session.id);
+                                    // Note: we keep the existing session ID to preserve message history
+                                    match diesel::update(sessions::table.find(existing_session.id))
+                                        .set((
+                                            sessions::status.eq("active"),
+                                            sessions::last_activity.eq(diesel::dsl::now),
+                                            sessions::session_name.eq(&session_name),
+                                            sessions::session_key.eq(&key),
+                                            sessions::working_directory.eq(
+                                                if working_directory.is_empty() {
+                                                    None
+                                                } else {
+                                                    Some(&working_directory)
+                                                },
+                                            ),
+                                        ))
+                                        .execute(&mut conn)
+                                    {
+                                        Ok(_) => {
+                                            db_session_id = Some(existing_session.id);
+                                            registration_success = true;
+                                            if found_by_dir {
                                                 info!(
-                                                    "Session created in DB: {} ({})",
+                                                    "Session consolidated by directory: {} -> {} ({})",
+                                                    existing_session.id, claude_session_id, working_directory
+                                                );
+                                            } else {
+                                                info!(
+                                                    "Session reactivated in DB: {} ({})",
                                                     session_name, claude_session_id
                                                 );
                                             }
-                                            Err(e) => {
-                                                error!("Failed to persist session: {}", e);
-                                            }
+                                        }
+                                        Err(e) => {
+                                            error!("Failed to reactivate session: {}", e);
+                                            registration_error =
+                                                Some("Failed to reactivate session".to_string());
+                                        }
+                                    }
+                                } else if let Some(user_id) = user_id {
+                                    // Create new session
+                                    let new_session = NewSessionWithId {
+                                        id: claude_session_id,
+                                        user_id,
+                                        session_name: session_name.clone(),
+                                        session_key: key.clone(),
+                                        working_directory: if working_directory.is_empty() {
+                                            None
+                                        } else {
+                                            Some(working_directory.clone())
+                                        },
+                                        status: "active".to_string(),
+                                    };
+
+                                    match diesel::insert_into(sessions::table)
+                                        .values(&new_session)
+                                        .get_result::<crate::models::Session>(&mut conn)
+                                    {
+                                        Ok(session) => {
+                                            db_session_id = Some(session.id);
+                                            registration_success = true;
+                                            info!(
+                                                "Session created in DB: {} ({})",
+                                                session_name, claude_session_id
+                                            );
+                                        }
+                                        Err(e) => {
+                                            error!("Failed to persist session: {}", e);
+                                            registration_error =
+                                                Some("Failed to persist session".to_string());
                                         }
                                     }
                                 } else {
-                                    // Create new session with the provided session_id as primary key
-                                    let user_id =
-                                        get_user_id_from_token(&app_state, auth_token.as_deref());
-
-                                    if let Some(user_id) = user_id {
-                                        let new_session = NewSessionWithId {
-                                            id: claude_session_id,
-                                            user_id,
-                                            session_name: session_name.clone(),
-                                            session_key: key.clone(),
-                                            working_directory: if working_directory.is_empty() {
-                                                None
-                                            } else {
-                                                Some(working_directory.clone())
-                                            },
-                                            status: "active".to_string(),
-                                        };
-
-                                        match diesel::insert_into(sessions::table)
-                                            .values(&new_session)
-                                            .get_result::<crate::models::Session>(&mut conn)
-                                        {
-                                            Ok(session) => {
-                                                db_session_id = Some(session.id);
-                                                info!(
-                                                    "Session persisted to DB: {} ({})",
-                                                    session_name, claude_session_id
-                                                );
-                                            }
-                                            Err(e) => {
-                                                error!("Failed to persist session: {}", e);
-                                            }
-                                        }
-                                    } else {
-                                        warn!("No valid user_id for session, not persisting to DB");
-                                    }
+                                    warn!("No valid user_id for session, not persisting to DB");
+                                    registration_error = Some(
+                                        "Authentication failed - please re-authenticate"
+                                            .to_string(),
+                                    );
                                 }
+                            } else {
+                                error!("Failed to get database connection");
+                                registration_error = Some("Database connection failed".to_string());
                             }
 
+                            // Send RegisterAck to proxy
+                            let ack = ProxyMessage::RegisterAck {
+                                success: registration_success,
+                                session_id: claude_session_id,
+                                error: registration_error,
+                            };
+                            let _ = tx.send(ack);
+
                             info!(
-                                "Session registered: {} ({})",
-                                session_name, claude_session_id
+                                "Session registered: {} ({}) - success: {}",
+                                session_name, claude_session_id, registration_success
                             );
                         }
                         ProxyMessage::ClaudeOutput { content } => {
@@ -458,6 +488,7 @@ async fn handle_web_client_socket(socket: WebSocket, app_state: Arc<AppState>, u
                             auth_token: _,
                             working_directory: _,
                             resuming: _,
+                            force_new: _,
                         } => {
                             // Verify the user owns this session before allowing connection
                             match verify_session_ownership(&app_state, session_id, user_id) {

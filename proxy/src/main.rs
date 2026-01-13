@@ -286,6 +286,7 @@ async fn main() -> Result<()> {
         auth_token,
         working_directory: cwd,
         resuming,
+        force_new: args.new_session,
     };
 
     // Start Claude and run session

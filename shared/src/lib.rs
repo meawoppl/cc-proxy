@@ -29,6 +29,9 @@ pub enum ProxyMessage {
         /// Whether this is resuming an existing session
         #[serde(default)]
         resuming: bool,
+        /// Force creation of a new session entry (don't consolidate by directory)
+        #[serde(default)]
+        force_new: bool,
     },
 
     /// Output from Claude Code to be displayed
@@ -74,6 +77,17 @@ pub enum ProxyMessage {
         /// Optional reason for denial
         #[serde(skip_serializing_if = "Option::is_none")]
         reason: Option<String>,
+    },
+
+    /// Backend acknowledgment of session registration
+    RegisterAck {
+        /// Whether registration succeeded
+        success: bool,
+        /// The session ID that was registered
+        session_id: Uuid,
+        /// Error message if registration failed
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
     },
 }
 

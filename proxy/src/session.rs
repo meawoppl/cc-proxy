@@ -23,6 +23,8 @@ pub struct SessionConfig {
     pub auth_token: Option<String>,
     pub working_directory: String,
     pub resuming: bool,
+    /// Force creation of a new session (don't consolidate with existing directory session)
+    pub force_new: bool,
 }
 
 /// Exponential backoff helper
@@ -147,10 +149,10 @@ async fn run_single_connection(
         Err(duration) => return ConnectionResult::Disconnected(duration),
     };
 
-    let (mut ws_write, ws_read) = ws_stream.split();
+    let (mut ws_write, mut ws_read) = ws_stream.split();
 
-    // Register with backend
-    if let Err(duration) = register_session(&mut ws_write, config).await {
+    // Register with backend and wait for acknowledgment
+    if let Err(duration) = register_session(&mut ws_write, &mut ws_read, config).await {
         return ConnectionResult::Disconnected(duration);
     }
 
@@ -191,11 +193,16 @@ async fn connect_to_backend(
     }
 }
 
-/// Register session with the backend
-async fn register_session<S>(ws_write: &mut S, config: &SessionConfig) -> Result<(), Duration>
+/// Register session with the backend and wait for acknowledgment
+async fn register_session<S, R>(
+    ws_write: &mut S,
+    ws_read: &mut R,
+    config: &SessionConfig,
+) -> Result<(), Duration>
 where
     S: SinkExt<Message> + Unpin,
     S::Error: std::fmt::Display,
+    R: StreamExt<Item = Result<Message, tokio_tungstenite::tungstenite::Error>> + Unpin,
 {
     ui::print_status("Registering session...");
 
@@ -205,18 +212,68 @@ where
         auth_token: config.auth_token.clone(),
         working_directory: config.working_directory.clone(),
         resuming: config.resuming,
+        force_new: config.force_new,
     };
 
     let json = serde_json::to_string(&register_msg).unwrap_or_default();
 
     if let Err(e) = ws_write.send(Message::Text(json)).await {
         ui::print_failed();
-        error!("Failed to register session: {}", e);
+        error!("Failed to send registration message: {}", e);
         return Err(Duration::ZERO);
     }
 
-    ui::print_registered();
-    Ok(())
+    // Wait for RegisterAck with timeout
+    let ack_timeout = tokio::time::timeout(Duration::from_secs(10), async {
+        while let Some(msg) = ws_read.next().await {
+            match msg {
+                Ok(Message::Text(text)) => {
+                    if let Ok(ProxyMessage::RegisterAck {
+                        success,
+                        session_id: _,
+                        error,
+                    }) = serde_json::from_str::<ProxyMessage>(&text)
+                    {
+                        return Some((success, error));
+                    }
+                }
+                Ok(Message::Close(_)) => return None,
+                Err(_) => return None,
+                _ => continue,
+            }
+        }
+        None
+    })
+    .await;
+
+    match ack_timeout {
+        Ok(Some((true, _))) => {
+            ui::print_registered();
+            Ok(())
+        }
+        Ok(Some((false, error))) => {
+            let err_msg = error.as_deref().unwrap_or("Unknown error");
+            ui::print_registration_failed(err_msg);
+            if err_msg.contains("Authentication") || err_msg.contains("authenticate") {
+                ui::print_reauth_hint();
+            }
+            error!("Registration failed: {}", err_msg);
+            Err(Duration::ZERO)
+        }
+        Ok(None) => {
+            ui::print_failed();
+            error!("Connection closed during registration");
+            Err(Duration::ZERO)
+        }
+        Err(_) => {
+            // Timeout - assume success for backwards compatibility with older backends
+            ui::print_registered();
+            info!(
+                "No RegisterAck received (timeout), assuming success for backwards compatibility"
+            );
+            Ok(())
+        }
+    }
 }
 
 /// Permission response data
