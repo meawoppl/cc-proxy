@@ -80,6 +80,7 @@ pub fn dashboard_page() -> Html {
     let session_costs = use_state(HashMap::<Uuid, f64>::new);
     let connected_sessions = use_state(HashSet::<Uuid>::new);
     let pending_delete = use_state(|| None::<Uuid>);
+    let nav_mode = use_state(|| false);
 
     // Fetch sessions
     let fetch_sessions = {
@@ -364,54 +365,106 @@ pub fn dashboard_page() -> Html {
         })
     };
 
-    // Get active sessions only for the rail
-    let active_sessions: Vec<_> = sessions
+    // Get active sessions only for the rail, sorted by repo name then hostname
+    let mut active_sessions: Vec<_> = sessions
         .iter()
         .filter(|s| s.status.as_str() == "active")
         .cloned()
         .collect();
 
+    // Sort by repo name (project) first, then hostname
+    active_sessions.sort_by(|a, b| {
+        let (project_a, hostname_a) = get_session_display_parts(a);
+        let (project_b, hostname_b) = get_session_display_parts(b);
+        let repo_a = project_a.as_deref().unwrap_or("");
+        let repo_b = project_b.as_deref().unwrap_or("");
+        match repo_a.to_lowercase().cmp(&repo_b.to_lowercase()) {
+            std::cmp::Ordering::Equal => hostname_a.to_lowercase().cmp(&hostname_b.to_lowercase()),
+            other => other,
+        }
+    });
+
     let waiting_count = awaiting_sessions.len();
 
-    // Keyboard handling - use Shift+key to avoid conflicts with text input
+    // Two-mode keyboard handling:
+    // - Edit Mode (default): typing works, Escape -> Nav Mode, Shift+Tab -> next waiting
+    // - Nav Mode: arrow keys navigate, Enter/Escape -> Edit Mode, numbers select directly
     let on_keydown = {
         let on_navigate = on_navigate.clone();
         let on_next_waiting = on_next_waiting.clone();
         let on_toggle_park = on_toggle_park.clone();
+        let on_select_session = on_select_session.clone();
         let focused_index = focused_index.clone();
-        let active_sessions = sessions
-            .iter()
-            .filter(|s| s.status.as_str() == "active")
-            .cloned()
-            .collect::<Vec<_>>();
+        let nav_mode = nav_mode.clone();
+        let active_sessions = active_sessions.clone();
         Callback::from(move |e: KeyboardEvent| {
-            // Only handle shortcuts with Shift held
-            if !e.shift_key() {
+            let in_nav_mode = *nav_mode;
+
+            // Shift+Tab always jumps to next waiting session (works in both modes)
+            if e.shift_key() && e.key() == "Tab" {
+                e.prevent_default();
+                on_next_waiting.emit(());
                 return;
             }
-            match e.key().as_str() {
-                "ArrowLeft" => {
-                    e.prevent_default();
-                    on_navigate.emit(-1);
+
+            // Ctrl+Shift+P toggles park (works in both modes)
+            if e.ctrl_key() && e.shift_key() && (e.key() == "P" || e.key() == "p") {
+                e.prevent_default();
+                if let Some(session) = active_sessions.get(*focused_index) {
+                    on_toggle_park.emit(session.id);
                 }
-                "ArrowRight" => {
-                    e.prevent_default();
-                    on_navigate.emit(1);
-                }
-                "Tab" => {
-                    e.prevent_default();
-                    on_next_waiting.emit(());
-                }
-                "P" | "p" => {
-                    // Ctrl+Shift+P toggles park on focused session
-                    if e.ctrl_key() {
+                return;
+            }
+
+            if in_nav_mode {
+                // Navigation Mode
+                match e.key().as_str() {
+                    "Escape" | "i" => {
                         e.prevent_default();
-                        if let Some(session) = active_sessions.get(*focused_index) {
-                            on_toggle_park.emit(session.id);
+                        nav_mode.set(false);
+                    }
+                    "ArrowUp" | "ArrowLeft" | "k" | "h" => {
+                        e.prevent_default();
+                        on_navigate.emit(-1);
+                    }
+                    "ArrowDown" | "ArrowRight" | "j" | "l" => {
+                        e.prevent_default();
+                        on_navigate.emit(1);
+                    }
+                    "Enter" => {
+                        e.prevent_default();
+                        nav_mode.set(false);
+                    }
+                    "w" => {
+                        e.prevent_default();
+                        on_next_waiting.emit(());
+                    }
+                    "x" => {
+                        // Close session - could trigger delete confirmation
+                        // For now, just a placeholder
+                    }
+                    key => {
+                        // Number keys 1-9 for direct selection
+                        if let Ok(num) = key.parse::<usize>() {
+                            if (1..=9).contains(&num) && num <= active_sessions.len() {
+                                e.prevent_default();
+                                on_select_session.emit(num - 1);
+                                nav_mode.set(false);
+                            }
                         }
                     }
                 }
-                _ => {}
+            } else {
+                // Edit Mode
+                match e.key().as_str() {
+                    "Escape" => {
+                        e.prevent_default();
+                        nav_mode.set(true);
+                    }
+                    _ => {
+                        // Let all other keys through to the input
+                    }
+                }
             }
         })
     };
@@ -475,6 +528,7 @@ pub fn dashboard_page() -> Html {
                         parked_sessions={(*parked_sessions).clone()}
                         session_costs={(*session_costs).clone()}
                         connected_sessions={(*connected_sessions).clone()}
+                        nav_mode={*nav_mode}
                         on_select={on_select_session.clone()}
                         on_delete={on_delete.clone()}
                         on_toggle_park={on_toggle_park.clone()}
@@ -482,7 +536,7 @@ pub fn dashboard_page() -> Html {
 
                     // Render ALL session views - keep them alive for instant switching
                     // Only the focused one is visible, others are hidden via CSS
-                    <div class="session-views-container">
+                    <div class={classes!("session-views-container", if *nav_mode { Some("nav-mode") } else { None })}>
                         {
                             active_sessions.iter().enumerate().map(|(index, session)| {
                                 let is_focused = index == *focused_index;
@@ -505,12 +559,30 @@ pub fn dashboard_page() -> Html {
                         }
                     </div>
 
-                    // Keyboard hints
-                    <div class="keyboard-hints">
-                        <span>{ "Shift + ←→ navigate" }</span>
-                        <span>{ "Shift + Tab = next waiting" }</span>
-                        <span>{ "Ctrl+Shift+P = park" }</span>
-                        <span>{ "Enter = send" }</span>
+                    // Keyboard hints - context-sensitive based on mode
+                    <div class={classes!("keyboard-hints", if *nav_mode { Some("nav-mode") } else { None })}>
+                        {
+                            if *nav_mode {
+                                html! {
+                                    <>
+                                        <span class="mode-indicator">{ "NAV" }</span>
+                                        <span>{ "↑↓ or jk = navigate" }</span>
+                                        <span>{ "1-9 = select" }</span>
+                                        <span>{ "w = next waiting" }</span>
+                                        <span>{ "Enter/Esc = edit mode" }</span>
+                                    </>
+                                }
+                            } else {
+                                html! {
+                                    <>
+                                        <span>{ "Esc = nav mode" }</span>
+                                        <span>{ "Shift+Tab = next waiting" }</span>
+                                        <span>{ "Ctrl+Shift+P = park" }</span>
+                                        <span>{ "Enter = send" }</span>
+                                    </>
+                                }
+                            }
+                        }
                     </div>
                 </>
             }
@@ -559,6 +631,7 @@ struct SessionRailProps {
     parked_sessions: HashSet<Uuid>,
     session_costs: HashMap<Uuid, f64>,
     connected_sessions: HashSet<Uuid>,
+    nav_mode: bool,
     on_select: Callback<usize>,
     on_delete: Callback<Uuid>,
     on_toggle_park: Callback<Uuid>,
@@ -616,11 +689,13 @@ fn session_rail(props: &SessionRailProps) -> Html {
                         })
                     };
 
+                    let in_nav_mode = props.nav_mode;
                     let pill_class = classes!(
                         "session-pill",
                         if is_focused { Some("focused") } else { None },
                         if is_awaiting { Some("awaiting") } else { None },
                         if is_parked { Some("parked") } else { None },
+                        if in_nav_mode { Some("nav-mode") } else { None },
                     );
 
                     let (project, hostname) = get_session_display_parts(session);
@@ -629,8 +704,22 @@ fn session_rail(props: &SessionRailProps) -> Html {
 
                     let connection_class = if is_connected { "pill-status connected" } else { "pill-status disconnected" };
 
+                    // Show number annotation only in nav mode (1-9)
+                    let number_annotation = if in_nav_mode && index < 9 {
+                        Some(format!("{}", index + 1))
+                    } else {
+                        None
+                    };
+
                     html! {
                         <div class={pill_class} onclick={on_click}>
+                            {
+                                if let Some(num) = &number_annotation {
+                                    html! { <span class="pill-number">{ num }</span> }
+                                } else {
+                                    html! {}
+                                }
+                            }
                             <span class={connection_class}>
                                 { if is_connected { "●" } else { "○" } }
                             </span>
@@ -1017,7 +1106,10 @@ impl Component for SessionView {
             SessionViewMsg::PermissionRequest(perm) => {
                 self.pending_permission = Some(perm);
                 self.permission_selected = 0; // Default to "Allow"
-                                              // Focus the permission prompt after render
+                                              // Permission requests count as "awaiting" - notify parent
+                let session_id = ctx.props().session.id;
+                ctx.props().on_awaiting_change.emit((session_id, true));
+                // Focus the permission prompt after render
                 if let Some(el) = self.permission_ref.cast::<web_sys::HtmlElement>() {
                     let _ = el.focus();
                 }
@@ -1108,6 +1200,8 @@ impl Component for SessionView {
                             }
                         });
                     }
+                    // Recheck awaiting state (permission is cleared)
+                    ctx.link().send_message(SessionViewMsg::CheckAwaiting);
                     // Focus back to input
                     if let Some(input) = self.input_ref.cast::<HtmlInputElement>() {
                         let _ = input.focus();
@@ -1136,6 +1230,8 @@ impl Component for SessionView {
                             }
                         });
                     }
+                    // Recheck awaiting state (permission is cleared)
+                    ctx.link().send_message(SessionViewMsg::CheckAwaiting);
                     // Focus back to input
                     if let Some(input) = self.input_ref.cast::<HtmlInputElement>() {
                         let _ = input.focus();
@@ -1164,6 +1260,8 @@ impl Component for SessionView {
                             }
                         });
                     }
+                    // Recheck awaiting state (permission is cleared)
+                    ctx.link().send_message(SessionViewMsg::CheckAwaiting);
                     // Focus back to input
                     if let Some(input) = self.input_ref.cast::<HtmlInputElement>() {
                         let _ = input.focus();
@@ -1190,8 +1288,8 @@ impl Component for SessionView {
                 true
             }
             SessionViewMsg::CheckAwaiting => {
-                // Check if last message is a result (awaiting input)
-                let is_awaiting = self.messages.last().is_some_and(|msg| {
+                // Check if last message is a result (awaiting input) OR if there's a pending permission request
+                let is_result_awaiting = self.messages.last().is_some_and(|msg| {
                     serde_json::from_str::<serde_json::Value>(msg)
                         .ok()
                         .and_then(|p| {
@@ -1201,6 +1299,8 @@ impl Component for SessionView {
                         })
                         .unwrap_or(false)
                 });
+                // Permission requests also count as "awaiting" - they block Claude
+                let is_awaiting = is_result_awaiting || self.pending_permission.is_some();
                 let session_id = ctx.props().session.id;
                 ctx.props()
                     .on_awaiting_change

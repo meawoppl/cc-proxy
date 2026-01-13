@@ -2457,6 +2457,29 @@ body {
     color: var(--success);
 }
 
+/* Number annotation for nav mode (1-9 keys) */
+.pill-number {
+    display: none;
+    font-size: 0.7rem;
+    font-weight: 700;
+    color: var(--accent);
+    background: rgba(122, 162, 247, 0.3);
+    padding: 0.1rem 0.4rem;
+    border-radius: 4px;
+    font-family: monospace;
+}
+
+.session-pill.nav-mode .pill-number {
+    display: inline-block;
+}
+
+/* Nav mode selection highlight */
+.session-pill.nav-mode.focused {
+    border-color: var(--accent);
+    background: rgba(122, 162, 247, 0.25);
+    box-shadow: 0 0 0 3px rgba(122, 162, 247, 0.4);
+}
+
 /* ==========================================================================
    Session View - Main Terminal Area
    ========================================================================== */
@@ -2795,6 +2818,18 @@ body {
     cursor: not-allowed;
 }
 
+/* Nav mode: dim the input area to indicate it's not active */
+.session-views-container.nav-mode .session-view-input {
+    opacity: 0.5;
+    pointer-events: none;
+    border-top: 1px dashed var(--accent);
+}
+
+.session-views-container.nav-mode .session-view-input .message-input {
+    border-color: var(--accent);
+    background: rgba(122, 162, 247, 0.05);
+}
+
 /* ==========================================================================
    Keyboard Hints Footer
    ========================================================================== */
@@ -2823,6 +2858,23 @@ body {
     padding: 0.15rem 0.4rem;
     font-family: monospace;
     font-size: 0.7rem;
+}
+
+/* Nav mode indicator badge */
+.keyboard-hints .mode-indicator {
+    font-weight: 700;
+    font-size: 0.75rem;
+    background: var(--accent);
+    color: var(--bg-dark);
+    padding: 0.2rem 0.6rem;
+    border-radius: 4px;
+    letter-spacing: 0.5px;
+}
+
+/* Nav mode styling for keyboard hints bar */
+.keyboard-hints.nav-mode {
+    background: rgba(122, 162, 247, 0.15);
+    border-top-color: var(--accent);
 }
 
 /* ==========================================================================
