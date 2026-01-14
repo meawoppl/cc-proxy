@@ -172,6 +172,31 @@ pub enum ProxyMessage {
    }
    ```
 
+### Migration Naming Convention
+
+**All migrations must follow this naming format:**
+
+```
+YYYY-MM-DD-HHMMSS_snake_case_description
+```
+
+**Examples:**
+- `2026-01-15-143022_add_users_table`
+- `2026-01-16-091500_add_index_to_sessions`
+
+**Special case:** The initial migration uses `00000000000000_initial_setup` (Diesel convention).
+
+**Enforced by CI:** The `./scripts/check-migration-names.sh` script validates all migration names and runs in GitHub Actions.
+
+**Creating new migrations:**
+```bash
+cd backend
+diesel migration generate add_feature_name
+# Creates: YYYY-MM-DD-HHMMSS_add_feature_name/
+```
+
+**If renaming existing migrations:** After renaming a migration directory, existing databases need their `__diesel_schema_migrations` table updated. See `backend/migrations/fix_migration_names.sql` for an example.
+
 ### Adding a New API Endpoint
 
 1. **Add handler** in `backend/src/handlers/`:
