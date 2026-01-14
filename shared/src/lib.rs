@@ -29,6 +29,9 @@ pub enum ProxyMessage {
         /// Whether this is resuming an existing session
         #[serde(default)]
         resuming: bool,
+        /// Current git branch (if in a git repo)
+        #[serde(default)]
+        git_branch: Option<String>,
     },
 
     /// Output from Claude Code to be displayed
@@ -86,6 +89,15 @@ pub enum ProxyMessage {
         #[serde(skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },
+
+    /// Update session metadata (e.g., git branch changed)
+    SessionUpdate {
+        /// The session ID to update
+        session_id: Uuid,
+        /// Updated git branch (if changed)
+        #[serde(skip_serializing_if = "Option::is_none")]
+        git_branch: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -119,6 +131,8 @@ pub struct SessionInfo {
     pub created_at: String,
     #[serde(default)]
     pub updated_at: Option<String>,
+    #[serde(default)]
+    pub git_branch: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

@@ -348,6 +348,18 @@ pub fn dashboard_page() -> Html {
         })
     };
 
+    // Update git branch when it changes
+    let on_branch_change = {
+        let sessions = sessions.clone();
+        Callback::from(move |(session_id, branch): (Uuid, Option<String>)| {
+            let mut updated = (*sessions).clone();
+            if let Some(session) = updated.iter_mut().find(|s| s.id == session_id) {
+                session.git_branch = branch;
+            }
+            sessions.set(updated);
+        })
+    };
+
     // Get all sessions for the rail, sorted by status (active first), then repo name, then hostname
     let mut active_sessions: Vec<_> = sessions.iter().cloned().collect();
 
@@ -543,6 +555,7 @@ pub fn dashboard_page() -> Html {
                                             on_cost_change={on_cost_change.clone()}
                                             on_connected_change={on_connected_change.clone()}
                                             on_message_sent={on_message_sent.clone()}
+                                            on_branch_change={on_branch_change.clone()}
                                         />
                                     </div>
                                 }
@@ -725,6 +738,13 @@ fn session_rail(props: &SessionRailProps) -> Html {
                                         html! {}
                                     }
                                 }
+                                {
+                                    if let Some(ref branch) = session.git_branch {
+                                        html! { <span class="pill-branch">{ branch }</span> }
+                                    } else {
+                                        html! { <span class="pill-no-branch">{ "⚠️ No Git Branch ⚠️" }</span> }
+                                    }
+                                }
                             </span>
                             {
                                 if cost > 0.0 {
@@ -768,6 +788,7 @@ pub struct SessionViewProps {
     pub on_cost_change: Callback<(Uuid, f64)>,
     pub on_connected_change: Callback<(Uuid, bool)>,
     pub on_message_sent: Callback<Uuid>,
+    pub on_branch_change: Callback<(Uuid, Option<String>)>,
 }
 
 /// Pending permission request
@@ -801,6 +822,8 @@ pub enum SessionViewMsg {
     /// Navigate permission options
     PermissionSelectUp,
     PermissionSelectDown,
+    /// Git branch changed
+    BranchChanged(Option<String>),
     /// Confirm current permission selection
     PermissionConfirm,
     /// Select and confirm permission option by index (for click/touch)
@@ -878,6 +901,7 @@ impl Component for SessionView {
                         auth_token: None,
                         working_directory: String::new(),
                         resuming: false,
+                        git_branch: None,
                     };
 
                     if let Ok(json) = serde_json::to_string(&register_msg) {
@@ -925,6 +949,14 @@ impl Component for SessionView {
                                             });
                                             link.send_message(SessionViewMsg::ReceivedOutput(
                                                 error_json.to_string(),
+                                            ));
+                                        }
+                                        ProxyMessage::SessionUpdate {
+                                            session_id: _,
+                                            git_branch,
+                                        } => {
+                                            link.send_message(SessionViewMsg::BranchChanged(
+                                                git_branch,
                                             ));
                                         }
                                         _ => {}
@@ -1298,6 +1330,11 @@ impl Component for SessionView {
                 ctx.props()
                     .on_awaiting_change
                     .emit((session_id, is_awaiting));
+                false
+            }
+            SessionViewMsg::BranchChanged(branch) => {
+                let session_id = ctx.props().session.id;
+                ctx.props().on_branch_change.emit((session_id, branch));
                 false
             }
         }

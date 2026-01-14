@@ -1,5 +1,6 @@
 //! Session management and WebSocket connection handling.
 
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
@@ -7,7 +8,7 @@ use claude_codes::io::{ContentBlock, ControlRequestPayload};
 use claude_codes::{AsyncClient, ClaudeInput, ClaudeOutput};
 use futures_util::{SinkExt, StreamExt};
 use shared::ProxyMessage;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Mutex};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{debug, error, info};
 use uuid::Uuid;
@@ -23,6 +24,7 @@ pub struct SessionConfig {
     pub auth_token: Option<String>,
     pub working_directory: String,
     pub resuming: bool,
+    pub git_branch: Option<String>,
 }
 
 /// Exponential backoff helper
@@ -149,8 +151,16 @@ async fn run_single_connection(
 
     let (mut ws_write, mut ws_read) = ws_stream.split();
 
+    // Re-detect git branch on reconnect (it may have changed)
+    let current_branch = get_git_branch(&config.working_directory);
+    let config_with_branch = SessionConfig {
+        git_branch: current_branch,
+        ..config.clone()
+    };
+
     // Register with backend and wait for acknowledgment
-    if let Err(duration) = register_session(&mut ws_write, &mut ws_read, config).await {
+    if let Err(duration) = register_session(&mut ws_write, &mut ws_read, &config_with_branch).await
+    {
         return ConnectionResult::Disconnected(duration);
     }
 
@@ -159,7 +169,15 @@ async fn run_single_connection(
     }
 
     // Run the message loop
-    run_message_loop(config, claude_client, input_tx, input_rx, ws_write, ws_read).await
+    run_message_loop(
+        &config_with_branch,
+        claude_client,
+        input_tx,
+        input_rx,
+        ws_write,
+        ws_read,
+    )
+    .await
 }
 
 /// Connect to the backend WebSocket
@@ -210,6 +228,7 @@ where
         auth_token: config.auth_token.clone(),
         working_directory: config.working_directory.clone(),
         resuming: config.resuming,
+        git_branch: config.git_branch.clone(),
     };
 
     let json = serde_json::to_string(&register_msg).unwrap_or_default();
@@ -315,8 +334,17 @@ where
     // Channel to signal WebSocket disconnection
     let (disconnect_tx, mut disconnect_rx) = tokio::sync::oneshot::channel::<()>();
 
+    // Shared state for tracking git branch updates
+    let current_branch = Arc::new(Mutex::new(config.git_branch.clone()));
+
     // Spawn output forwarder task
-    let output_task = spawn_output_forwarder(output_rx, ws_write.clone());
+    let output_task = spawn_output_forwarder(
+        output_rx,
+        ws_write.clone(),
+        session_id,
+        config.working_directory.clone(),
+        current_branch,
+    );
 
     // Spawn WebSocket reader task
     let reader_task = spawn_ws_reader(ws_read, input_tx, perm_tx, ws_write.clone(), disconnect_tx);
@@ -340,19 +368,128 @@ where
     result
 }
 
+/// Get the current git branch name, if in a git repository
+fn get_git_branch(cwd: &str) -> Option<String> {
+    std::process::Command::new("git")
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .current_dir(cwd)
+        .output()
+        .ok()
+        .and_then(|output| {
+            if output.status.success() {
+                String::from_utf8(output.stdout)
+                    .ok()
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty() && s != "HEAD")
+            } else {
+                None
+            }
+        })
+}
+
+/// Check if a tool use is a Bash command containing "git"
+fn is_git_bash_command(output: &ClaudeOutput) -> bool {
+    if let ClaudeOutput::User(user) = output {
+        for block in &user.message.content {
+            if let ContentBlock::ToolResult(tr) = block {
+                // Check if this is a result from a Bash tool
+                // We check tool_use_id pattern or content for git indicators
+                // The safest way is to track pending tool calls, but for simplicity
+                // we check if the result content mentions git commands
+                if let Some(ref content) = tr.content {
+                    let content_str = format!("{:?}", content);
+                    // Check if this looks like output from a git command
+                    if content_str.contains("git ")
+                        || content_str.contains("branch")
+                        || content_str.contains("checkout")
+                        || content_str.contains("merge")
+                        || content_str.contains("rebase")
+                        || content_str.contains("commit")
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    // Also check if an assistant message contains a Bash tool_use with git
+    if let ClaudeOutput::Assistant(asst) = output {
+        for block in &asst.message.content {
+            if let ContentBlock::ToolUse(tu) = block {
+                if tu.name == "Bash" {
+                    if let Some(cmd) = tu.input.get("command").and_then(|v| v.as_str()) {
+                        if cmd.contains("git ") {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
+/// Check and send git branch update if changed
+async fn check_and_send_branch_update<S>(
+    ws_write: &Arc<tokio::sync::Mutex<S>>,
+    session_id: Uuid,
+    working_directory: &str,
+    current_branch: &Arc<Mutex<Option<String>>>,
+) where
+    S: SinkExt<Message> + Unpin + Send,
+    S::Error: std::fmt::Display,
+{
+    let new_branch = get_git_branch(working_directory);
+    let mut branch_guard = current_branch.lock().await;
+
+    if *branch_guard != new_branch {
+        info!(
+            "Git branch changed: {:?} -> {:?}",
+            *branch_guard, new_branch
+        );
+        *branch_guard = new_branch.clone();
+
+        // Send SessionUpdate to backend
+        let update_msg = ProxyMessage::SessionUpdate {
+            session_id,
+            git_branch: new_branch,
+        };
+
+        if let Ok(json) = serde_json::to_string(&update_msg) {
+            let mut ws = ws_write.lock().await;
+            if let Err(e) = ws.send(Message::Text(json)).await {
+                error!("Failed to send branch update: {}", e);
+            }
+        }
+    }
+}
+
 /// Spawn the output forwarder task
 fn spawn_output_forwarder<S>(
     mut output_rx: mpsc::UnboundedReceiver<ClaudeOutput>,
-    ws_write: std::sync::Arc<tokio::sync::Mutex<S>>,
+    ws_write: Arc<tokio::sync::Mutex<S>>,
+    session_id: Uuid,
+    working_directory: String,
+    current_branch: Arc<Mutex<Option<String>>>,
 ) -> tokio::task::JoinHandle<()>
 where
     S: SinkExt<Message> + Unpin + Send + 'static,
     S::Error: std::fmt::Display,
 {
     tokio::spawn(async move {
+        let mut message_count: u64 = 0;
+        let mut pending_git_check = false;
+
         while let Some(output) = output_rx.recv().await {
+            message_count += 1;
+
             // Log detailed info about the message
             log_claude_output(&output);
+
+            // Check if this is a git-related bash command
+            if is_git_bash_command(&output) {
+                pending_git_check = true;
+            }
 
             // Handle ControlRequest specially - convert to PermissionRequest
             let msg = match &output {
@@ -391,6 +528,19 @@ where
                     error!("Failed to send to backend: {}", e);
                     break;
                 }
+            }
+
+            // Check for branch update after git commands or every 100 messages
+            let should_check_branch = pending_git_check || message_count.is_multiple_of(100);
+            if should_check_branch {
+                pending_git_check = false;
+                check_and_send_branch_update(
+                    &ws_write,
+                    session_id,
+                    &working_directory,
+                    &current_branch,
+                )
+                .await;
             }
         }
         info!("Output forwarder ended");
