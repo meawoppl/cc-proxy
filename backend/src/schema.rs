@@ -41,6 +41,8 @@ diesel::table! {
         last_activity -> Timestamp,
         created_at -> Timestamp,
         updated_at -> Timestamp,
+        #[max_length = 255]
+        git_branch -> Nullable<Varchar>,
     }
 }
 

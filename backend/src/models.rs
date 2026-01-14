@@ -38,6 +38,7 @@ pub struct Session {
     pub last_activity: NaiveDateTime,
     pub created_at: NaiveDateTime,
     pub updated_at: NaiveDateTime,
+    pub git_branch: Option<String>,
 }
 
 #[derive(Debug, Insertable)]
@@ -48,6 +49,7 @@ pub struct NewSession {
     pub session_key: String,
     pub working_directory: Option<String>,
     pub status: String,
+    pub git_branch: Option<String>,
 }
 
 /// NewSession variant that allows specifying the ID (for when we want to use Claude's session ID)
@@ -60,6 +62,7 @@ pub struct NewSessionWithId {
     pub session_key: String,
     pub working_directory: Option<String>,
     pub status: String,
+    pub git_branch: Option<String>,
 }
 
 #[derive(Debug, Queryable, Selectable, Serialize, Deserialize, Clone)]

@@ -136,6 +136,25 @@ fn default_session_name() -> String {
     format!("{}-{}", hostname, timestamp)
 }
 
+/// Get the current git branch name, if in a git repository
+fn get_git_branch(cwd: &str) -> Option<String> {
+    std::process::Command::new("git")
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .current_dir(cwd)
+        .output()
+        .ok()
+        .and_then(|output| {
+            if output.status.success() {
+                String::from_utf8(output.stdout)
+                    .ok()
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty() && s != "HEAD")
+            } else {
+                None
+            }
+        })
+}
+
 /// Handle --check-update: check for updates without installing
 fn handle_check_update() -> Result<()> {
     ui::print_checking_for_updates();
@@ -278,6 +297,12 @@ async fn main() -> Result<()> {
     // Resolve auth token
     let auth_token = resolve_auth_token(&args, &mut config, &cwd, &backend_url).await?;
 
+    // Detect git branch
+    let git_branch = get_git_branch(&cwd);
+    if let Some(ref branch) = git_branch {
+        info!("Detected git branch: {}", branch);
+    }
+
     // Build session config
     let session_config = SessionConfig {
         backend_url,
@@ -286,6 +311,7 @@ async fn main() -> Result<()> {
         auth_token,
         working_directory: cwd,
         resuming,
+        git_branch,
     };
 
     // Start Claude and run session

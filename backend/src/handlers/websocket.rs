@@ -110,6 +110,7 @@ async fn handle_session_socket(socket: WebSocket, app_state: Arc<AppState>) {
                             auth_token,
                             working_directory,
                             resuming,
+                            git_branch,
                         } => {
                             // Use session_id as the key for in-memory tracking
                             let key = claude_session_id.to_string();
@@ -146,6 +147,7 @@ async fn handle_session_socket(socket: WebSocket, app_state: Arc<AppState>) {
                                                     Some(&working_directory)
                                                 },
                                             ),
+                                            sessions::git_branch.eq(&git_branch),
                                         ))
                                         .execute(&mut conn)
                                     {
@@ -153,8 +155,8 @@ async fn handle_session_socket(socket: WebSocket, app_state: Arc<AppState>) {
                                             db_session_id = Some(existing_session.id);
                                             registration_success = true;
                                             info!(
-                                                "Session reactivated in DB: {} ({})",
-                                                session_name, claude_session_id
+                                                "Session reactivated in DB: {} ({}) branch: {:?}",
+                                                session_name, claude_session_id, git_branch
                                             );
                                         }
                                         Err(e) => {
@@ -182,6 +184,7 @@ async fn handle_session_socket(socket: WebSocket, app_state: Arc<AppState>) {
                                                 Some(working_directory.clone())
                                             },
                                             status: "active".to_string(),
+                                            git_branch: git_branch.clone(),
                                         };
 
                                         match diesel::insert_into(sessions::table)
@@ -192,8 +195,8 @@ async fn handle_session_socket(socket: WebSocket, app_state: Arc<AppState>) {
                                                 db_session_id = Some(session.id);
                                                 registration_success = true;
                                                 info!(
-                                                    "Session created in DB: {} ({})",
-                                                    session_name, claude_session_id
+                                                    "Session created in DB: {} ({}) branch: {:?}",
+                                                    session_name, claude_session_id, git_branch
                                                 );
                                             }
                                             Err(e) => {
@@ -226,6 +229,7 @@ async fn handle_session_socket(socket: WebSocket, app_state: Arc<AppState>) {
                                                 Some(working_directory.clone())
                                             },
                                             status: "active".to_string(),
+                                            git_branch: git_branch.clone(),
                                         };
 
                                         match diesel::insert_into(sessions::table)
@@ -236,8 +240,8 @@ async fn handle_session_socket(socket: WebSocket, app_state: Arc<AppState>) {
                                                 db_session_id = Some(session.id);
                                                 registration_success = true;
                                                 info!(
-                                                    "Session persisted to DB: {} ({})",
-                                                    session_name, claude_session_id
+                                                    "Session persisted to DB: {} ({}) branch: {:?}",
+                                                    session_name, claude_session_id, git_branch
                                                 );
                                             }
                                             Err(e) => {
@@ -347,6 +351,48 @@ async fn handle_session_socket(socket: WebSocket, app_state: Arc<AppState>) {
                                         permission_suggestions,
                                     },
                                 );
+                            }
+                        }
+                        ProxyMessage::SessionUpdate {
+                            session_id: update_session_id,
+                            git_branch,
+                        } => {
+                            // Update session metadata in DB
+                            if let (Some(current_session_id), Ok(mut conn)) =
+                                (db_session_id, db_pool.get())
+                            {
+                                // Verify the session_id matches to prevent spoofing
+                                if current_session_id == update_session_id {
+                                    use crate::schema::sessions;
+                                    if let Err(e) =
+                                        diesel::update(sessions::table.find(current_session_id))
+                                            .set(sessions::git_branch.eq(&git_branch))
+                                            .execute(&mut conn)
+                                    {
+                                        error!("Failed to update git_branch: {}", e);
+                                    } else {
+                                        info!(
+                                            "Updated git_branch for session {}: {:?}",
+                                            current_session_id, git_branch
+                                        );
+
+                                        // Broadcast to web clients so they update immediately
+                                        if let Some(ref key) = session_key {
+                                            session_manager.broadcast_to_web_clients(
+                                                key,
+                                                ProxyMessage::SessionUpdate {
+                                                    session_id: current_session_id,
+                                                    git_branch: git_branch.clone(),
+                                                },
+                                            );
+                                        }
+                                    }
+                                } else {
+                                    warn!(
+                                        "SessionUpdate session_id mismatch: {} != {}",
+                                        update_session_id, current_session_id
+                                    );
+                                }
                             }
                         }
                         _ => {}
@@ -498,6 +544,7 @@ async fn handle_web_client_socket(socket: WebSocket, app_state: Arc<AppState>, u
                             auth_token: _,
                             working_directory: _,
                             resuming: _,
+                            git_branch: _,
                         } => {
                             // Verify the user owns this session before allowing connection
                             match verify_session_ownership(&app_state, session_id, user_id) {
