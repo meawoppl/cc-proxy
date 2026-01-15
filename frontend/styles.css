@@ -63,7 +63,7 @@ body {
     margin: 2rem 0;
 }
 
-.terminal-header {
+.terminal-preview .terminal-header {
     background: var(--border);
     padding: 0.4rem 0.75rem;
     display: flex;
@@ -339,10 +339,6 @@ body {
     border-color: var(--accent);
 }
 
-.portal-terminal {
-    padding: 1rem;
-}
-
 .terminal-preview-content {
     font-family: 'Courier New', monospace;
     font-size: 0.9rem;
@@ -413,22 +409,13 @@ body {
     height: 100vh;
 }
 
-.terminal-header {
+.terminal-page .terminal-header {
     background: var(--bg-darker);
     border-bottom: 1px solid var(--border);
     padding: 1rem;
     display: flex;
     justify-content: space-between;
     align-items: center;
-}
-
-.back-button {
-    background: transparent;
-    border: 1px solid var(--border);
-    color: var(--text-primary);
-    padding: 0.5rem 1rem;
-    border-radius: 4px;
-    cursor: pointer;
 }
 
 .status.connected {
@@ -3127,25 +3114,6 @@ body {
    Delete Confirmation Modal
    ========================================================================== */
 
-.modal-overlay {
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background: rgba(0, 0, 0, 0.7);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 1000;
-    animation: fadeIn 0.15s ease-out;
-}
-
-@keyframes fadeIn {
-    from { opacity: 0; }
-    to { opacity: 1; }
-}
-
 /* Delete confirmation modals should be narrower */
 .modal-content.delete-confirm {
     max-width: 400px;
@@ -3449,21 +3417,6 @@ body {
 .token-status.revoked {
     background: rgba(247, 118, 142, 0.2);
     color: var(--error);
-}
-
-.session-status.active {
-    background: rgba(158, 206, 106, 0.2);
-    color: var(--success);
-}
-
-.session-status.inactive {
-    background: rgba(255, 158, 100, 0.2);
-    color: #ff9e64;
-}
-
-.session-status.disconnected {
-    background: rgba(127, 132, 156, 0.2);
-    color: var(--text-secondary);
 }
 
 /* Action buttons */
