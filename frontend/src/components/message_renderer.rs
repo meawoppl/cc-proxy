@@ -1456,6 +1456,8 @@ pub enum TextSegment {
     Text(String),
     Url(String),
     Bold(String),
+    /// A URL wrapped in bold: **https://example.com**
+    BoldUrl(String),
 }
 
 /// Characters that can appear in a URL path/query but shouldn't end a URL
@@ -1669,17 +1671,11 @@ fn merge_text_segments(segments: Vec<TextSegment>) -> Vec<TextSegment> {
             TextSegment::Text(t) => {
                 current_text.push_str(&t);
             }
-            TextSegment::Url(u) => {
+            other => {
                 if !current_text.is_empty() {
                     result.push(TextSegment::Text(std::mem::take(&mut current_text)));
                 }
-                result.push(TextSegment::Url(u));
-            }
-            TextSegment::Bold(b) => {
-                if !current_text.is_empty() {
-                    result.push(TextSegment::Text(std::mem::take(&mut current_text)));
-                }
-                result.push(TextSegment::Bold(b));
+                result.push(other);
             }
         }
     }
@@ -1739,10 +1735,51 @@ fn parse_bold(segments: Vec<TextSegment>) -> Vec<TextSegment> {
     result
 }
 
+/// Parse URLs in text, returning Text and Url segments
+fn parse_urls_in_text(text: &str) -> Vec<TextSegment> {
+    parse_urls(text)
+}
+
+/// Parse URLs inside Bold segments, converting to BoldUrl when found
+fn parse_urls_in_bold(segments: Vec<TextSegment>) -> Vec<TextSegment> {
+    let mut result = Vec::new();
+
+    for segment in segments {
+        match segment {
+            TextSegment::Bold(text) => {
+                // Check if the bold content is a single URL
+                let url_segments = parse_urls_in_text(&text);
+                if url_segments.len() == 1 {
+                    if let TextSegment::Url(url) = &url_segments[0] {
+                        // Entire bold content is a URL
+                        result.push(TextSegment::BoldUrl(url.clone()));
+                        continue;
+                    }
+                }
+                // Not a single URL, keep as bold text
+                result.push(TextSegment::Bold(text));
+            }
+            other => result.push(other),
+        }
+    }
+
+    result
+}
+
 /// Render text with URLs converted to clickable links and **bold** formatting
 pub fn linkify_text(text: &str) -> Html {
-    let segments = parse_urls(text);
-    let segments = parse_bold(segments);
+    // 1. Parse bold first so **https://url** stays together
+    let segments = parse_bold(vec![TextSegment::Text(text.to_string())]);
+    // 2. Parse URLs in regular text segments
+    let segments: Vec<TextSegment> = segments
+        .into_iter()
+        .flat_map(|seg| match seg {
+            TextSegment::Text(t) => parse_urls_in_text(&t),
+            other => vec![other],
+        })
+        .collect();
+    // 3. Convert Bold segments containing URLs to BoldUrl
+    let segments = parse_urls_in_bold(segments);
 
     html! {
         <>
@@ -1757,6 +1794,13 @@ pub fn linkify_text(text: &str) -> Html {
                         },
                         TextSegment::Bold(t) => html! {
                             <strong class="message-bold">{ t }</strong>
+                        },
+                        TextSegment::BoldUrl(url) => html! {
+                            <strong class="message-bold">
+                                <a href={url.clone()} target="_blank" rel="noopener noreferrer" class="message-link">
+                                    { &url }
+                                </a>
+                            </strong>
                         },
                     }
                 }).collect::<Html>()
@@ -2179,6 +2223,51 @@ mod tests {
             vec![
                 TextSegment::Bold("first".to_string()),
                 TextSegment::Bold("second".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_bold_url() {
+        // This is the main fix - bold wrapping a URL should render as a bold link
+        let text = "Check **https://example.com** for info";
+        let segments = parse_bold(vec![TextSegment::Text(text.to_string())]);
+        let segments: Vec<TextSegment> = segments
+            .into_iter()
+            .flat_map(|seg| match seg {
+                TextSegment::Text(t) => parse_urls(&t),
+                other => vec![other],
+            })
+            .collect();
+        let segments = parse_urls_in_bold(segments);
+        assert_eq!(
+            segments,
+            vec![
+                TextSegment::Text("Check ".to_string()),
+                TextSegment::BoldUrl("https://example.com".to_string()),
+                TextSegment::Text(" for info".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_bold_url_with_port() {
+        let text = "Server at **http://localhost:8080/api** works";
+        let segments = parse_bold(vec![TextSegment::Text(text.to_string())]);
+        let segments: Vec<TextSegment> = segments
+            .into_iter()
+            .flat_map(|seg| match seg {
+                TextSegment::Text(t) => parse_urls(&t),
+                other => vec![other],
+            })
+            .collect();
+        let segments = parse_urls_in_bold(segments);
+        assert_eq!(
+            segments,
+            vec![
+                TextSegment::Text("Server at ".to_string()),
+                TextSegment::BoldUrl("http://localhost:8080/api".to_string()),
+                TextSegment::Text(" works".to_string()),
             ]
         );
     }
