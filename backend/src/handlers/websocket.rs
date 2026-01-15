@@ -34,14 +34,20 @@ pub struct SessionManager {
     pub last_ack_seq: Arc<DashMap<Uuid, u64>>,
 }
 
-impl SessionManager {
-    pub fn new() -> Self {
+impl Default for SessionManager {
+    fn default() -> Self {
         Self {
             sessions: Arc::new(DashMap::new()),
             web_clients: Arc::new(DashMap::new()),
             user_clients: Arc::new(DashMap::new()),
             last_ack_seq: Arc::new(DashMap::new()),
         }
+    }
+}
+
+impl SessionManager {
+    pub fn new() -> Self {
+        Self::default()
     }
 
     pub fn register_session(&self, session_key: SessionId, sender: ClientSender) {
