@@ -42,6 +42,10 @@ pub struct Session {
     pub updated_at: NaiveDateTime,
     pub git_branch: Option<String>,
     pub total_cost_usd: f64,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub cache_creation_tokens: i64,
+    pub cache_read_tokens: i64,
 }
 
 #[derive(Debug, Insertable)]
@@ -126,4 +130,8 @@ pub struct NewDeletedSessionCosts {
     pub user_id: Uuid,
     pub cost_usd: f64,
     pub session_count: i32,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub cache_creation_tokens: i64,
+    pub cache_read_tokens: i64,
 }

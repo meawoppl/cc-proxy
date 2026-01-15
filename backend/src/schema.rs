@@ -8,6 +8,10 @@ diesel::table! {
         session_count -> Int4,
         created_at -> Timestamptz,
         updated_at -> Timestamptz,
+        input_tokens -> Int8,
+        output_tokens -> Int8,
+        cache_creation_tokens -> Int8,
+        cache_read_tokens -> Int8,
     }
 }
 
@@ -55,6 +59,10 @@ diesel::table! {
         #[max_length = 255]
         git_branch -> Nullable<Varchar>,
         total_cost_usd -> Float8,
+        input_tokens -> Int8,
+        output_tokens -> Int8,
+        cache_creation_tokens -> Int8,
+        cache_read_tokens -> Int8,
     }
 }
 
