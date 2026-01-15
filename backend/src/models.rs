@@ -115,3 +115,15 @@ pub struct NewProxyAuthToken {
     pub token_hash: String,
     pub expires_at: NaiveDateTime,
 }
+
+// ============================================================================
+// Deleted Session Costs Models
+// ============================================================================
+
+#[derive(Debug, Insertable)]
+#[diesel(table_name = crate::schema::deleted_session_costs)]
+pub struct NewDeletedSessionCosts {
+    pub user_id: Uuid,
+    pub cost_usd: f64,
+    pub session_count: i32,
+}
