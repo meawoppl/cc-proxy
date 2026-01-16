@@ -1,9 +1,10 @@
 //! Voice WebSocket Handler
 //!
 //! Handles audio streaming for voice-to-text functionality.
-//! Audio is received as binary PCM16 frames and will be forwarded
-//! to Google Speech-to-Text for transcription.
+//! Audio is received as binary PCM16 frames and forwarded to
+//! Google Speech-to-Text for transcription.
 
+use crate::speech::{SpeechConfig, SpeechService};
 use crate::AppState;
 use axum::{
     extract::{
@@ -17,6 +18,7 @@ use diesel::prelude::*;
 use futures_util::{SinkExt, StreamExt};
 use shared::ProxyMessage;
 use std::sync::Arc;
+use tokio::sync::mpsc;
 use tower_cookies::Cookies;
 use tracing::{error, info, warn};
 use uuid::Uuid;
@@ -115,35 +117,70 @@ pub async fn handle_voice_websocket(
         return StatusCode::FORBIDDEN.into_response();
     }
 
+    // Check if speech credentials are configured
+    let speech_credentials = app_state.speech_credentials_path.clone();
+
     info!(
         "Voice WebSocket upgrade for user {} on session {}",
         user_id, session_id
     );
-    ws.on_upgrade(move |socket| handle_voice_socket(socket, user_id, session_id))
+    ws.on_upgrade(move |socket| {
+        handle_voice_socket(socket, user_id, session_id, speech_credentials)
+    })
 }
 
-async fn handle_voice_socket(socket: WebSocket, user_id: Uuid, session_id: Uuid) {
-    let (mut sender, mut receiver) = socket.split();
+/// State for an active voice recognition session
+struct VoiceRecognitionSession {
+    audio_tx: mpsc::UnboundedSender<Vec<u8>>,
+}
+
+async fn handle_voice_socket(
+    socket: WebSocket,
+    user_id: Uuid,
+    session_id: Uuid,
+    speech_credentials: Option<String>,
+) {
+    let (mut ws_sender, mut ws_receiver) = socket.split();
 
     info!(
         "Voice WebSocket connected for user {} on session {}",
         user_id, session_id
     );
 
+    // Channel for sending messages back to the client
+    let (client_tx, mut client_rx) = mpsc::unbounded_channel::<ProxyMessage>();
+
+    // Spawn task to send messages to WebSocket
+    let send_task = tokio::spawn(async move {
+        while let Some(msg) = client_rx.recv().await {
+            if let Ok(json) = serde_json::to_string(&msg) {
+                if ws_sender.send(Message::Text(json)).await.is_err() {
+                    break;
+                }
+            }
+        }
+    });
+
+    // Current recognition session (if any)
+    let mut recognition_session: Option<VoiceRecognitionSession> = None;
+
     // Handle incoming messages
-    while let Some(msg) = receiver.next().await {
+    while let Some(msg) = ws_receiver.next().await {
         match msg {
             Ok(Message::Binary(data)) => {
                 // Binary audio data (PCM16, 16kHz mono)
-                info!(
-                    "Received {} bytes of audio data for session {}",
-                    data.len(),
-                    session_id
-                );
-
-                // TODO: Forward to Google Speech-to-Text streaming API
-                // For now, just acknowledge receipt
-                // The Speech-to-Text client will be added in a future step
+                if let Some(ref session) = recognition_session {
+                    // Forward to speech recognition
+                    if session.audio_tx.send(data.to_vec()).is_err() {
+                        warn!("Speech recognition session closed unexpectedly");
+                        recognition_session = None;
+                    }
+                } else {
+                    warn!(
+                        "Received audio data but no recognition session active for {}",
+                        session_id
+                    );
+                }
             }
             Ok(Message::Text(text)) => {
                 // Handle control messages (JSON)
@@ -157,11 +194,76 @@ async fn handle_voice_socket(socket: WebSocket, user_id: Uuid, session_id: Uuid)
                                 warn!("StartVoice session_id mismatch");
                                 continue;
                             }
+
+                            // Stop any existing session
+                            recognition_session = None;
+
                             info!(
                                 "Starting voice recognition for session {} with language {}",
                                 session_id, language_code
                             );
-                            // TODO: Initialize Speech-to-Text streaming session
+
+                            // Check if speech credentials are configured
+                            let credentials = match &speech_credentials {
+                                Some(path) => path.clone(),
+                                None => {
+                                    let error_msg = ProxyMessage::VoiceError {
+                                        session_id,
+                                        message: "Speech-to-text not configured on server"
+                                            .to_string(),
+                                    };
+                                    let _ = client_tx.send(error_msg);
+                                    continue;
+                                }
+                            };
+
+                            // Create speech service with config
+                            let config = SpeechConfig {
+                                credentials_path: Some(credentials),
+                                language_code: language_code.clone(),
+                                ..Default::default()
+                            };
+                            let speech_service = SpeechService::new(config);
+
+                            // Start streaming recognition
+                            match speech_service.start_streaming(Some(language_code)).await {
+                                Ok((audio_tx, mut result_rx)) => {
+                                    recognition_session =
+                                        Some(VoiceRecognitionSession { audio_tx });
+
+                                    // Spawn task to forward transcription results to client
+                                    let client_tx_clone = client_tx.clone();
+                                    tokio::spawn(async move {
+                                        while let Some(result) = result_rx.recv().await {
+                                            let msg = ProxyMessage::Transcription {
+                                                session_id,
+                                                transcript: result.transcript,
+                                                is_final: result.is_final,
+                                                confidence: result.confidence,
+                                            };
+                                            if client_tx_clone.send(msg).is_err() {
+                                                break;
+                                            }
+                                        }
+                                    });
+
+                                    info!("Speech recognition session started for {}", session_id);
+                                }
+                                Err(e) => {
+                                    error!(
+                                        "Failed to start speech recognition for {}: {}",
+                                        session_id, e
+                                    );
+                                    let error_msg = ProxyMessage::VoiceError {
+                                        session_id,
+                                        message: format!(
+                                            "Failed to start speech recognition: {}",
+                                            e
+                                        ),
+                                    };
+                                    let _ = client_tx.send(error_msg);
+                                }
+                            }
                         }
                         ProxyMessage::StopVoice {
                             session_id: msg_session_id,
@@ -171,7 +273,8 @@ async fn handle_voice_socket(socket: WebSocket, user_id: Uuid, session_id: Uuid)
                                 continue;
                             }
                             info!("Stopping voice recognition for session {}", session_id);
-                            // TODO: Close Speech-to-Text streaming session
+                            // Dropping the session will close the audio channel
+                            recognition_session = None;
                         }
                         _ => {
                             warn!("Unexpected message type on voice WebSocket");
@@ -183,11 +286,8 @@ async fn handle_voice_socket(socket: WebSocket, user_id: Uuid, session_id: Uuid)
                 info!("Voice WebSocket closed for session {}", session_id);
                 break;
             }
-            Ok(Message::Ping(data)) => {
-                // Respond to ping with pong
-                if sender.send(Message::Pong(data)).await.is_err() {
-                    break;
-                }
+            Ok(Message::Ping(_)) => {
+                // Pong is handled automatically by axum
             }
             Err(e) => {
                 error!("Voice WebSocket error: {}", e);
@@ -196,6 +296,10 @@ async fn handle_voice_socket(socket: WebSocket, user_id: Uuid, session_id: Uuid)
             _ => {}
         }
     }
+
+    // Cleanup
+    drop(recognition_session);
+    send_task.abort();
 
     info!(
         "Voice WebSocket disconnected for user {} on session {}",
