@@ -174,15 +174,18 @@ add_to_path() {{
 
 echo "Adding to PATH..."
 
-# Try common shell rc files
-UPDATED=0
-if add_to_path "${{HOME}}/.bashrc"; then UPDATED=1; fi
-if add_to_path "${{HOME}}/.zshrc"; then UPDATED=1; fi
-if add_to_path "${{HOME}}/.profile"; then UPDATED=1; fi
+# Try common shell rc files, track which one to source
+UPDATED_RC=""
+if add_to_path "${{HOME}}/.zshrc"; then UPDATED_RC="${{HOME}}/.zshrc"; fi
+if add_to_path "${{HOME}}/.bashrc"; then UPDATED_RC="${{HOME}}/.bashrc"; fi
+if add_to_path "${{HOME}}/.profile"; then UPDATED_RC="${{HOME}}/.profile"; fi
 
-if [ "${{UPDATED}}" -eq 1 ]; then
+if [ -n "${{UPDATED_RC}}" ]; then
     echo ""
-    echo "PATH updated! Restart your shell or run: source ~/.bashrc"
+    echo "PATH updated!"
+    echo ""
+    echo "To use claude-proxy now, run:"
+    echo "  source ${{UPDATED_RC}}"
 else
     echo "PATH already configured or no rc files found."
 fi
