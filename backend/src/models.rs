@@ -122,6 +122,33 @@ pub struct NewProxyAuthToken {
 }
 
 // ============================================================================
+// Pending Permission Request Models
+// ============================================================================
+
+#[derive(Debug, Queryable, Selectable, Serialize, Deserialize, Clone)]
+#[diesel(table_name = crate::schema::pending_permission_requests)]
+#[diesel(check_for_backend(diesel::pg::Pg))]
+pub struct PendingPermissionRequest {
+    pub id: Uuid,
+    pub session_id: Uuid,
+    pub request_id: String,
+    pub tool_name: String,
+    pub input: serde_json::Value,
+    pub permission_suggestions: Option<serde_json::Value>,
+    pub created_at: NaiveDateTime,
+}
+
+#[derive(Debug, Insertable)]
+#[diesel(table_name = crate::schema::pending_permission_requests)]
+pub struct NewPendingPermissionRequest {
+    pub session_id: Uuid,
+    pub request_id: String,
+    pub tool_name: String,
+    pub input: serde_json::Value,
+    pub permission_suggestions: Option<serde_json::Value>,
+}
+
+// ============================================================================
 // Deleted Session Costs Models
 // ============================================================================
 
