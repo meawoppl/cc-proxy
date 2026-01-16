@@ -73,7 +73,8 @@ type AudioSender = Rc<RefCell<Option<futures_channel::mpsc::UnboundedSender<Vec<
 
 /// Combined voice session state
 pub struct VoiceSession {
-    recording_state: VoiceRecordingState,
+    /// Held to keep audio resources alive - Drop handles cleanup
+    _recording_state: VoiceRecordingState,
     audio_sender: AudioSender,
 }
 
@@ -291,7 +292,7 @@ async fn start_voice_session(
     let recording_state = start_recording(audio_sender.clone()).await?;
 
     Ok(VoiceSession {
-        recording_state,
+        _recording_state: recording_state,
         audio_sender,
     })
 }
