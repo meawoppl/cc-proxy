@@ -977,6 +977,10 @@ pub enum SessionViewMsg {
     PermissionConfirm,
     /// Select and confirm permission option by index (for click/touch)
     PermissionSelectAndConfirm(usize),
+    /// Navigate command history up (older)
+    HistoryUp,
+    /// Navigate command history down (newer)
+    HistoryDown,
 }
 
 pub struct SessionView {
@@ -1000,6 +1004,12 @@ pub struct SessionView {
     /// Handle to cancel pending reconnect timer
     #[allow(dead_code)]
     reconnect_timer: Option<Timeout>,
+    /// Command history (most recent last)
+    command_history: Vec<String>,
+    /// Current position in history (None = new input, Some(i) = viewing history[i])
+    history_position: Option<usize>,
+    /// Draft input preserved when navigating history
+    draft_input: String,
 }
 
 impl Component for SessionView {
@@ -1153,6 +1163,9 @@ impl Component for SessionView {
             permission_selected: 0,
             reconnect_attempt: 0,
             reconnect_timer: None,
+            command_history: Vec::new(),
+            history_position: None,
+            draft_input: String::new(),
         }
     }
 
@@ -1222,6 +1235,19 @@ impl Component for SessionView {
                 if input.is_empty() {
                     return false;
                 }
+
+                // Add to command history (avoid consecutive duplicates)
+                const MAX_HISTORY: usize = 100;
+                if self.command_history.last() != Some(&input) {
+                    self.command_history.push(input.clone());
+                    // Trim to max size
+                    if self.command_history.len() > MAX_HISTORY {
+                        self.command_history.remove(0);
+                    }
+                }
+                // Reset history navigation
+                self.history_position = None;
+                self.draft_input.clear();
 
                 // Don't add to messages here - wait for it to come back via WebSocket
                 // (with --replay-user-messages flag, Claude echoes user input back)
@@ -1623,6 +1649,52 @@ impl Component for SessionView {
                 ctx.props().on_branch_change.emit((session_id, branch));
                 false
             }
+            SessionViewMsg::HistoryUp => {
+                if self.command_history.is_empty() {
+                    return false;
+                }
+                match self.history_position {
+                    None => {
+                        // First time pressing up - save current input as draft
+                        self.draft_input = self.input_value.clone();
+                        // Go to most recent command
+                        let pos = self.command_history.len() - 1;
+                        self.history_position = Some(pos);
+                        self.input_value = self.command_history[pos].clone();
+                    }
+                    Some(pos) if pos > 0 => {
+                        // Go to older command
+                        let new_pos = pos - 1;
+                        self.history_position = Some(new_pos);
+                        self.input_value = self.command_history[new_pos].clone();
+                    }
+                    _ => {
+                        // Already at oldest, do nothing
+                        return false;
+                    }
+                }
+                true
+            }
+            SessionViewMsg::HistoryDown => {
+                match self.history_position {
+                    Some(pos) if pos < self.command_history.len() - 1 => {
+                        // Go to newer command
+                        let new_pos = pos + 1;
+                        self.history_position = Some(new_pos);
+                        self.input_value = self.command_history[new_pos].clone();
+                    }
+                    Some(_) => {
+                        // At newest history entry, go back to draft
+                        self.history_position = None;
+                        self.input_value = self.draft_input.clone();
+                    }
+                    None => {
+                        // Not in history mode, do nothing
+                        return false;
+                    }
+                }
+                true
+            }
         }
     }
 
@@ -1637,6 +1709,20 @@ impl Component for SessionView {
         let handle_input = link.callback(|e: InputEvent| {
             let input: HtmlInputElement = e.target_unchecked_into();
             SessionViewMsg::UpdateInput(input.value())
+        });
+
+        let handle_keydown = link.callback(|e: KeyboardEvent| {
+            match e.key().as_str() {
+                "ArrowUp" => {
+                    e.prevent_default();
+                    SessionViewMsg::HistoryUp
+                }
+                "ArrowDown" => {
+                    e.prevent_default();
+                    SessionViewMsg::HistoryDown
+                }
+                _ => SessionViewMsg::CheckAwaiting, // No-op
+            }
         });
 
         html! {
@@ -1748,6 +1834,7 @@ impl Component for SessionView {
                         placeholder="Type your message..."
                         value={self.input_value.clone()}
                         oninput={handle_input}
+                        onkeydown={handle_keydown}
                         disabled={!self.ws_connected}
                     />
                     <button type="submit" class="send-button" disabled={!self.ws_connected}>
