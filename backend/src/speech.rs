@@ -113,6 +113,7 @@ impl SpeechService {
             encoding: self.config.encoding.into(),
             sample_rate_hertz: self.config.sample_rate_hertz,
             language_code: language,
+            enable_automatic_punctuation: true,
             ..Default::default()
         };
 
