@@ -249,14 +249,15 @@ impl Component for VoiceInput {
             "Start voice input"
         };
 
-        // Calculate volume ring style when recording
+        // Calculate volume level bar style when recording
+        // Uses a green gradient fill from bottom based on volume level
         let volume_style = if self.is_recording {
-            // Scale volume to a visible ring size (2-8px)
-            let ring_size = 2.0 + (self.volume_level * 6.0);
-            let opacity = 0.3 + (self.volume_level * 0.5);
+            // Volume level as percentage (0-100%)
+            let fill_percent = (self.volume_level * 100.0).min(100.0);
+            // Green gradient from bottom - matches success/code highlight color
             format!(
-                "box-shadow: 0 0 0 {}px rgba(247, 118, 142, {})",
-                ring_size, opacity
+                "background: linear-gradient(to top, rgba(158, 206, 106, 0.6) {}%, rgba(247, 118, 142, 0.15) {}%)",
+                fill_percent, fill_percent
             )
         } else {
             String::new()
