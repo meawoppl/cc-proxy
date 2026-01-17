@@ -1806,7 +1806,7 @@ impl Component for SessionView {
                 <div class="session-view-messages" ref={self.messages_ref.clone()}>
                     {
                         group_messages(&self.messages).into_iter().map(|group| {
-                            html! { <MessageGroupRenderer group={group} /> }
+                            html! { <MessageGroupRenderer group={group} session_id={Some(ctx.props().session.id)} /> }
                         }).collect::<Html>()
                     }
                 </div>
