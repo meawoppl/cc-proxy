@@ -163,3 +163,30 @@ pub struct NewDeletedSessionCosts {
     pub cache_creation_tokens: i64,
     pub cache_read_tokens: i64,
 }
+
+// ============================================================================
+// Raw Message Log Models
+// ============================================================================
+
+#[derive(Debug, Queryable, Selectable, Serialize, Deserialize, Clone)]
+#[diesel(table_name = crate::schema::raw_message_log)]
+#[diesel(check_for_backend(diesel::pg::Pg))]
+pub struct RawMessageLog {
+    pub id: Uuid,
+    pub session_id: Option<Uuid>,
+    pub user_id: Option<Uuid>,
+    pub message_content: serde_json::Value,
+    pub message_source: String,
+    pub render_reason: Option<String>,
+    pub created_at: NaiveDateTime,
+}
+
+#[derive(Debug, Insertable)]
+#[diesel(table_name = crate::schema::raw_message_log)]
+pub struct NewRawMessageLog {
+    pub session_id: Option<Uuid>,
+    pub user_id: Option<Uuid>,
+    pub message_content: serde_json::Value,
+    pub message_source: String,
+    pub render_reason: Option<String>,
+}

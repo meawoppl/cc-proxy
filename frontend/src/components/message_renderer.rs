@@ -1,6 +1,9 @@
 use super::markdown::render_markdown;
+use gloo_net::http::Request;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use uuid::Uuid;
+use wasm_bindgen_futures::spawn_local;
 use yew::prelude::*;
 
 /// A group of messages to render together
@@ -226,6 +229,9 @@ pub struct ResultMessage {
 #[derive(Properties, PartialEq)]
 pub struct MessageRendererProps {
     pub json: String,
+    /// Optional session ID for logging raw messages
+    #[prop_or_default]
+    pub session_id: Option<Uuid>,
 }
 
 #[function_component(MessageRenderer)]
@@ -239,20 +245,25 @@ pub fn message_renderer(props: &MessageRendererProps) -> Html {
         Ok(ClaudeMessage::Result(msg)) => render_result_message(&msg),
         Ok(ClaudeMessage::User(msg)) => render_user_message(&msg),
         Ok(ClaudeMessage::Error(msg)) => render_error_message(&msg),
-        Ok(ClaudeMessage::Unknown) | Err(_) => render_raw_json(&props.json),
+        Ok(ClaudeMessage::Unknown) | Err(_) => {
+            html! { <RawMessageRenderer json={props.json.clone()} session_id={props.session_id} /> }
+        }
     }
 }
 
 #[derive(Properties, PartialEq)]
 pub struct MessageGroupRendererProps {
     pub group: MessageGroup,
+    /// Optional session ID for logging raw messages
+    #[prop_or_default]
+    pub session_id: Option<Uuid>,
 }
 
 #[function_component(MessageGroupRenderer)]
 pub fn message_group_renderer(props: &MessageGroupRendererProps) -> Html {
     match &props.group {
         MessageGroup::Single(json) => {
-            html! { <MessageRenderer json={json.clone()} /> }
+            html! { <MessageRenderer json={json.clone()} session_id={props.session_id} /> }
         }
         MessageGroup::AssistantGroup(messages) => render_assistant_group(messages),
     }
@@ -1504,6 +1515,78 @@ fn render_result_message(msg: &ResultMessage) -> Html {
             </div>
         </div>
     }
+}
+
+/// Request body for logging raw messages
+#[derive(Serialize)]
+struct LogRawMessageRequest {
+    session_id: Option<Uuid>,
+    message_content: Value,
+    message_source: String,
+    render_reason: Option<String>,
+}
+
+/// Log a raw message to the backend for debugging
+fn log_raw_message(session_id: Option<Uuid>, json: &str, reason: &str) {
+    // Parse the JSON content or wrap as string if invalid
+    let message_content =
+        serde_json::from_str::<Value>(json).unwrap_or_else(|_| Value::String(json.to_string()));
+
+    let request_body = LogRawMessageRequest {
+        session_id,
+        message_content,
+        message_source: "frontend".to_string(),
+        render_reason: Some(reason.to_string()),
+    };
+
+    spawn_local(async move {
+        let result = Request::post("/api/raw-messages")
+            .header("Content-Type", "application/json")
+            .json(&request_body)
+            .map_err(|e| format!("Failed to serialize: {:?}", e))
+            .map(|req| req.send());
+
+        if let Ok(future) = result {
+            if let Err(e) = future.await {
+                log::warn!("Failed to log raw message: {:?}", e);
+            }
+        }
+    });
+}
+
+/// Props for raw message renderer with logging
+#[derive(Properties, PartialEq)]
+pub struct RawMessageRendererProps {
+    pub json: String,
+    #[prop_or_default]
+    pub session_id: Option<Uuid>,
+}
+
+/// Component that renders raw JSON and logs it to the backend
+#[function_component(RawMessageRenderer)]
+pub fn raw_message_renderer(props: &RawMessageRendererProps) -> Html {
+    let json = props.json.clone();
+    let session_id = props.session_id;
+
+    // Log the raw message once when first rendered
+    use_effect_with(json.clone(), move |json| {
+        // Determine the reason for raw rendering
+        let reason = match serde_json::from_str::<Value>(json) {
+            Ok(val) => {
+                if let Some(msg_type) = val.get("type").and_then(|t| t.as_str()) {
+                    format!("Unknown message type: {}", msg_type)
+                } else {
+                    "Message has no 'type' field".to_string()
+                }
+            }
+            Err(e) => format!("JSON parse error: {}", e),
+        };
+
+        log_raw_message(session_id, json, &reason);
+        || ()
+    });
+
+    render_raw_json(&props.json)
 }
 
 fn render_raw_json(json: &str) -> Html {
