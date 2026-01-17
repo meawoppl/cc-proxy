@@ -168,6 +168,7 @@ pub struct NewDeletedSessionCosts {
 // Session Member Models
 // ============================================================================
 
+#[allow(dead_code)] // Will be used for querying session membership in UI
 #[derive(Debug, Queryable, Selectable, Serialize, Deserialize, Clone)]
 #[diesel(table_name = crate::schema::session_members)]
 #[diesel(check_for_backend(diesel::pg::Pg))]
