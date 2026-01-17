@@ -42,7 +42,7 @@ fn render_event(events: &[Event]) -> (Html, usize) {
 
     match &events[0] {
         Event::Start(tag) => render_tag(tag, events),
-        Event::Text(text) => (linkify_urls(&text), 1),
+        Event::Text(text) => (linkify_urls(text), 1),
         Event::Code(code) => (
             html! { <code class="md-inline-code">{ code.to_string() }</code> },
             1,
