@@ -235,6 +235,10 @@ async fn handle_voice_socket(
                                     let client_tx_clone = client_tx.clone();
                                     tokio::spawn(async move {
                                         while let Some(result) = result_rx.recv().await {
+                                            info!(
+                                                "Forwarding to WebSocket: is_final={}, transcript=\"{}\"",
+                                                result.is_final, result.transcript
+                                            );
                                             let msg = ProxyMessage::Transcription {
                                                 session_id,
                                                 transcript: result.transcript,
@@ -242,6 +246,7 @@ async fn handle_voice_socket(
                                                 confidence: result.confidence,
                                             };
                                             if client_tx_clone.send(msg).is_err() {
+                                                info!("Client disconnected, stopping transcription forwarding");
                                                 break;
                                             }
                                         }

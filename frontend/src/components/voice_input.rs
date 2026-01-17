@@ -58,6 +58,9 @@ pub struct VoiceInputProps {
     /// Whether the component is disabled
     #[prop_or(false)]
     pub disabled: bool,
+    /// Optional NodeRef to attach to the button for programmatic control
+    #[prop_or_default]
+    pub button_ref: Option<NodeRef>,
 }
 
 /// Voice input state
@@ -244,9 +247,9 @@ impl Component for VoiceInput {
         let title = if !self.browser_supported {
             "Voice input not supported in this browser"
         } else if self.is_recording {
-            "Stop recording"
+            "Stop recording (Ctrl+M)"
         } else {
-            "Start voice input"
+            "Start voice input (Ctrl+M)"
         };
 
         // Calculate volume level bar style when recording
@@ -263,8 +266,12 @@ impl Component for VoiceInput {
             String::new()
         };
 
+        // Use provided ref or create a dummy one (button_ref is optional for keyboard shortcut)
+        let button_ref = ctx.props().button_ref.clone().unwrap_or_default();
+
         html! {
             <button
+                ref={button_ref}
                 class={button_class}
                 onclick={onclick}
                 disabled={disabled}
