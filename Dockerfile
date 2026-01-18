@@ -21,7 +21,7 @@ COPY build-output/backend /app/backend
 
 # Download pre-built claude-proxy binary from GitHub releases
 RUN mkdir -p /app/bin && \
-    curl -fsSL https://github.com/meawoppl/cc-proxy/releases/download/latest/claude-proxy-linux-x86_64 \
+    curl -fsSL https://github.com/meawoppl/claude-code-portal/releases/download/latest/claude-proxy-linux-x86_64 \
     -o /app/bin/claude-proxy && \
     chmod +x /app/bin/claude-proxy
 
