@@ -1,6 +1,4 @@
-use crate::components::{
-    group_messages, MessageGroupRenderer, ProxyTokenSetup, ShareDialog, VoiceInput,
-};
+use crate::components::{group_messages, MessageGroupRenderer, ProxyTokenSetup, VoiceInput};
 use crate::utils;
 use crate::Route;
 use futures_util::{SinkExt, StreamExt};
@@ -123,7 +121,6 @@ pub fn dashboard_page() -> Html {
     let total_user_spend = use_state(|| 0.0f64);
     let is_admin = use_state(|| false);
     let voice_enabled = use_state(|| false);
-    let share_session_id = use_state(|| None::<Uuid>);
 
     // Fetch current user info (to check admin status and voice_enabled)
     {
@@ -565,22 +562,6 @@ pub fn dashboard_page() -> Html {
         })
     };
 
-    // Open share dialog for a session
-    let on_share = {
-        let share_session_id = share_session_id.clone();
-        Callback::from(move |session_id: Uuid| {
-            share_session_id.set(Some(session_id));
-        })
-    };
-
-    // Close share dialog
-    let on_close_share = {
-        let share_session_id = share_session_id.clone();
-        Callback::from(move |_| {
-            share_session_id.set(None);
-        })
-    };
-
     // Update awaiting state after sending message (no auto-advance)
     let on_message_sent = {
         let awaiting_sessions = awaiting_sessions.clone();
@@ -798,7 +779,6 @@ pub fn dashboard_page() -> Html {
                         on_delete={on_delete.clone()}
                         on_leave={on_leave.clone()}
                         on_toggle_pause={on_toggle_pause.clone()}
-                        on_share={on_share.clone()}
                     />
 
                     // Render ALL session views - keep them alive for instant switching
@@ -917,19 +897,6 @@ pub fn dashboard_page() -> Html {
                 }
             }
 
-            // Share dialog
-            {
-                if let Some(session_id) = *share_session_id {
-                    html! {
-                        <ShareDialog
-                            session_id={session_id}
-                            on_close={on_close_share.clone()}
-                        />
-                    }
-                } else {
-                    html! {}
-                }
-            }
         </div>
     }
 }
@@ -951,7 +918,6 @@ struct SessionRailProps {
     on_delete: Callback<Uuid>,
     on_leave: Callback<Uuid>,
     on_toggle_pause: Callback<Uuid>,
-    on_share: Callback<Uuid>,
 }
 
 #[function_component(SessionRail)]
@@ -1005,8 +971,6 @@ fn session_rail(props: &SessionRailProps) -> Html {
                             on_toggle_pause.emit(session_id);
                         })
                     };
-
-                    let on_share = props.on_share.clone();
 
                     let on_leave = {
                         let on_leave = props.on_leave.clone();
@@ -1100,21 +1064,6 @@ fn session_rail(props: &SessionRailProps) -> Html {
                             >
                                 { if is_paused { "▶" } else { "⏸" } }
                             </button>
-                            // Share button for owners
-                            {
-                                if session.my_role == "owner" {
-                                    let session_id = session.id;
-                                    let on_share_click = on_share.reform(move |e: MouseEvent| {
-                                        e.stop_propagation();
-                                        session_id
-                                    });
-                                    html! {
-                                        <button class="pill-share" onclick={on_share_click} title="Share session">{ "👤+" }</button>
-                                    }
-                                } else {
-                                    html! {}
-                                }
-                            }
                             // Delete for owners, Leave for non-owners
                             {
                                 if session.my_role == "owner" {
