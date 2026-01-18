@@ -20,18 +20,6 @@ A web portal that extends [Claude Code](https://docs.anthropic.com/en/docs/claud
 - **Long-Running Tasks**: Start a task, walk away, check results later from any device
 - **Consistent Environment**: Keep your dev environment on one machine, access it everywhere
 
-## Deployment Modes
-
-Claude Code Portal supports different authentication configurations:
-
-| Mode | Use Case | Configuration |
-|------|----------|---------------|
-| **Single User** | Personal server | Restrict to your Google account |
-| **Organization** | Team/company | Limit to specific email domain |
-| **Public** | Open access (like txcl.io) | Allow any Google account |
-
-See [Google OAuth Configuration](#google-oauth-configuration) for setup details.
-
 ## Quick Start
 
 ```bash
@@ -87,100 +75,15 @@ The **portal** refers to the complete system: backend server, web frontend, and 
 | **CLI** | `claude-portal` binary that wraps Claude Code and connects to backend |
 | **Shared** | Common types and protocol definitions (WASM-compatible) |
 
-## Usage
-
-### Web Interface
-
-1. Open the portal URL in your browser
-2. Sign in with Google
-3. View your active Claude Code sessions
-4. Click any session to interact with Claude
-5. Use the microphone button or `Ctrl+M` for voice input
-
-### Running the CLI
-
-On your development machine:
-
-```bash
-claude-portal \
-  --backend-url wss://your-portal.com \
-  --session-name "my-dev-machine"
-```
-
-On first run, the CLI displays a verification URL and code for OAuth authentication. Credentials are cached in `~/.config/claude-code-portal/config.json`.
-
-### Voice Commands
-
-The web interface supports voice input for hands-free coding:
-
-- Click the microphone icon or press `Ctrl+M` to start recording
-- Speak your command naturally
-- Click again or press `Ctrl+M` to stop and send
-- Works in Chrome, Edge, and other browsers with Web Speech API support
-
-## Google OAuth Configuration
-
-To deploy your own instance, you need Google OAuth credentials:
-
-### 1. Create a Google Cloud Project
-
-1. Go to [Google Cloud Console](https://console.cloud.google.com/)
-2. Create a new project or select an existing one
-3. Enable the **Google+ API** (for user info)
-
-### 2. Configure OAuth Consent Screen
-
-1. Navigate to **APIs & Services > OAuth consent screen**
-2. Choose **External** (or **Internal** for Google Workspace orgs)
-3. Fill in the required fields:
-   - App name: Your portal name
-   - User support email: Your email
-   - Developer contact: Your email
-4. Add scopes: `email`, `profile`, `openid`
-5. Add test users if in testing mode
-
-### 3. Create OAuth Credentials
-
-1. Navigate to **APIs & Services > Credentials**
-2. Click **Create Credentials > OAuth client ID**
-3. Application type: **Web application**
-4. Add authorized redirect URIs:
-   - `https://your-domain.com/auth/google/callback`
-   - `http://localhost:3000/auth/google/callback` (for development)
-5. Save the **Client ID** and **Client Secret**
-
-### 4. Configure Environment Variables
-
-Create a `.env` file or set environment variables:
-
-```bash
-GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com
-GOOGLE_CLIENT_SECRET=your-client-secret
-GOOGLE_REDIRECT_URI=https://your-domain.com/auth/google/callback
-
-# Optional: Restrict access to specific email domain
-# ALLOWED_EMAIL_DOMAIN=yourcompany.com
-
-# Optional: Restrict to specific email addresses
-# ALLOWED_EMAILS=user1@gmail.com,user2@gmail.com
-```
-
-### Access Control Options
-
-| Variable | Effect |
-|----------|--------|
-| No restrictions | Any Google account can sign in |
-| `ALLOWED_EMAIL_DOMAIN=company.com` | Only `@company.com` emails allowed |
-| `ALLOWED_EMAILS=a@x.com,b@y.com` | Only listed emails allowed |
-
 ## Documentation
 
 | Document | Description |
 |----------|-------------|
+| [Usage Guide](docs/USAGE.md) | Web interface, CLI options, voice input, session sharing |
 | [Local Development](docs/LOCAL_DEVELOPMENT.md) | Quick setup with `dev.sh`, available commands |
 | [Development Guide](docs/DEVELOPING.md) | Full dev workflow, building, testing, contributing |
+| [Deployment Guide](docs/DEPLOYING.md) | Production deployment, Google OAuth setup, configuration |
 | [Docker Guide](docs/DOCKER.md) | Docker and Kubernetes deployment with 1Password |
-| [Deployment Guide](docs/DEPLOYING.md) | Production deployment and configuration |
 | [Troubleshooting](TROUBLESHOOTING.md) | Common issues and solutions |
 
 ## Platform Support

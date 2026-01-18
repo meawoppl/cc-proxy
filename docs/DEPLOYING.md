@@ -8,9 +8,7 @@ This guide covers deploying claude-code-portal to production.
   - [NeonDB](https://neon.tech) (recommended, serverless)
   - Or any PostgreSQL 12+ instance
 
-- **Google OAuth Credentials**
-  - [Create OAuth Client](https://console.cloud.google.com/apis/credentials)
-  - Set authorized redirect URI: `https://your-domain.com/auth/google/callback`
+- **Google OAuth Credentials** (see [Google OAuth Setup](#google-oauth-setup) below)
 
 ## Environment Variables
 
@@ -52,7 +50,7 @@ docker-compose logs -f backend
 docker-compose down
 ```
 
-See [DOCKER.md](../DOCKER.md) for detailed Docker deployment instructions.
+See [DOCKER.md](DOCKER.md) for detailed Docker deployment instructions.
 
 ## Manual Deployment
 
@@ -170,3 +168,67 @@ Pre-built binaries for all platforms are available from [GitHub Releases](https:
 ## Troubleshooting
 
 See [TROUBLESHOOTING.md](../TROUBLESHOOTING.md) for common issues and solutions.
+
+## Google OAuth Setup
+
+To deploy your own instance, you need Google OAuth credentials.
+
+### 1. Create a Google Cloud Project
+
+1. Go to [Google Cloud Console](https://console.cloud.google.com/)
+2. Create a new project or select an existing one
+3. Enable the **Google+ API** (for user info)
+
+### 2. Configure OAuth Consent Screen
+
+1. Navigate to **APIs & Services > OAuth consent screen**
+2. Choose **External** (or **Internal** for Google Workspace orgs)
+3. Fill in the required fields:
+   - App name: Your portal name
+   - User support email: Your email
+   - Developer contact: Your email
+4. Add scopes: `email`, `profile`, `openid`
+5. Add test users if in testing mode
+
+### 3. Create OAuth Credentials
+
+1. Navigate to **APIs & Services > Credentials**
+2. Click **Create Credentials > OAuth client ID**
+3. Application type: **Web application**
+4. Add authorized redirect URIs:
+   - `https://your-domain.com/auth/google/callback`
+   - `http://localhost:3000/auth/google/callback` (for development)
+5. Save the **Client ID** and **Client Secret**
+
+### 4. Configure Environment
+
+Add to your `.env` file:
+
+```bash
+GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com
+GOOGLE_CLIENT_SECRET=your-client-secret
+GOOGLE_REDIRECT_URI=https://your-domain.com/auth/google/callback
+```
+
+### Access Control Options
+
+Control who can access your portal:
+
+| Variable | Effect |
+|----------|--------|
+| *(none)* | Any Google account can sign in |
+| `ALLOWED_EMAIL_DOMAIN=company.com` | Only `@company.com` emails allowed |
+| `ALLOWED_EMAILS=a@x.com,b@y.com` | Only listed emails allowed |
+
+Example configurations:
+
+```bash
+# Single user (personal server)
+ALLOWED_EMAILS=your.email@gmail.com
+
+# Organization (team/company)
+ALLOWED_EMAIL_DOMAIN=yourcompany.com
+
+# Public access (like txcl.io)
+# Don't set either variable
+```
