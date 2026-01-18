@@ -17,6 +17,28 @@ use web_sys::{Element, HtmlInputElement, KeyboardEvent};
 use yew::prelude::*;
 use yew_router::prelude::*;
 
+const PAUSED_SESSIONS_STORAGE_KEY: &str = "cc-proxy-paused-sessions";
+
+/// Load paused session IDs from localStorage
+fn load_paused_sessions() -> HashSet<Uuid> {
+    web_sys::window()
+        .and_then(|w| w.local_storage().ok().flatten())
+        .and_then(|storage| storage.get_item(PAUSED_SESSIONS_STORAGE_KEY).ok().flatten())
+        .and_then(|json| serde_json::from_str::<Vec<String>>(&json).ok())
+        .map(|ids| ids.iter().filter_map(|s| Uuid::parse_str(s).ok()).collect())
+        .unwrap_or_default()
+}
+
+/// Save paused session IDs to localStorage
+fn save_paused_sessions(paused: &HashSet<Uuid>) {
+    if let Some(storage) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) {
+        let ids: Vec<String> = paused.iter().map(|id| id.to_string()).collect();
+        if let Ok(json) = serde_json::to_string(&ids) {
+            let _ = storage.set_item(PAUSED_SESSIONS_STORAGE_KEY, &json);
+        }
+    }
+}
+
 /// Calculate exponential backoff delay for reconnection attempts
 fn calculate_backoff(attempt: u32) -> u32 {
     const INITIAL_MS: u32 = 1000;
@@ -90,7 +112,7 @@ pub fn dashboard_page() -> Html {
     let show_new_session = use_state(|| false);
     let focused_index = use_state(|| 0usize);
     let awaiting_sessions = use_state(HashSet::<Uuid>::new);
-    let paused_sessions = use_state(HashSet::<Uuid>::new);
+    let paused_sessions = use_state(load_paused_sessions);
     let session_costs = use_state(HashMap::<Uuid, f64>::new);
     let connected_sessions = use_state(HashSet::<Uuid>::new);
     let pending_delete = use_state(|| None::<Uuid>);
@@ -466,6 +488,7 @@ pub fn dashboard_page() -> Html {
             } else {
                 set.insert(session_id);
             }
+            save_paused_sessions(&set);
             paused_sessions.set(set);
         })
     };
