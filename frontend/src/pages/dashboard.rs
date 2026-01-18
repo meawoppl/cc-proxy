@@ -651,9 +651,14 @@ pub fn dashboard_page() -> Html {
     let waiting_count = awaiting_sessions.len();
 
     // Count disconnected sessions for the reconnection banner
+    // Only count sessions that are both activated (have started loading) and not paused
     let disconnected_count = active_sessions
         .iter()
-        .filter(|s| !connected_sessions.contains(&s.id))
+        .filter(|s| {
+            activated_sessions.contains(&s.id)
+                && !paused_sessions.contains(&s.id)
+                && !connected_sessions.contains(&s.id)
+        })
         .count();
 
     // Two-mode keyboard handling:
