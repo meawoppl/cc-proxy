@@ -154,9 +154,6 @@ claude-portal
 ```bash
 # Linux/Mac
 cat ~/.config/claude-code-portal/config.json | jq
-
-# Or use the full path
-cat $(dirname $(which claude-portal))/../config/claude-code-portal/config.json
 ```
 
 ### Manually edit config
