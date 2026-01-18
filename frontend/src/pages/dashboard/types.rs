@@ -2,9 +2,13 @@
 
 use serde::Deserialize;
 use std::cell::RefCell;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use uuid::Uuid;
+
+/// Answers for multiple AskUserQuestion questions
+/// Key is question index, value is the selected answer(s)
+pub type QuestionAnswers = HashMap<usize, String>;
 
 /// Storage key for paused sessions in localStorage
 pub const PAUSED_SESSIONS_STORAGE_KEY: &str = "claude-portal-paused-sessions";

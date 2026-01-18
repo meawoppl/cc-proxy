@@ -8,7 +8,7 @@ use gloo_net::http::Request;
 use gloo_net::websocket::{futures::WebSocket, Message};
 use shared::{ProxyMessage, SessionInfo};
 use std::cell::RefCell;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use uuid::Uuid;
 use wasm_bindgen::closure::Closure;
@@ -19,8 +19,8 @@ use yew::prelude::*;
 
 use super::permission_dialog::PermissionDialog;
 use super::types::{
-    calculate_backoff, parse_ask_user_question, MessagesResponse, PendingPermission, WsSender,
-    MAX_MESSAGES_PER_SESSION,
+    calculate_backoff, parse_ask_user_question, MessagesResponse, PendingPermission,
+    QuestionAnswers, WsSender, MAX_MESSAGES_PER_SESSION,
 };
 
 /// Props for the SessionView component
@@ -84,10 +84,14 @@ pub enum SessionViewMsg {
     VoiceError(String),
     /// Toggle voice recording (for keyboard shortcut)
     ToggleVoice,
-    /// Answer an AskUserQuestion with selected option(s)
-    AnswerQuestion(String),
-    /// Toggle multi-select option for AskUserQuestion
-    ToggleQuestionOption(usize),
+    /// Set answer for a specific question in AskUserQuestion
+    /// (question_index, answer)
+    SetQuestionAnswer(usize, String),
+    /// Toggle multi-select option for a specific question in AskUserQuestion
+    /// (question_index, option_index)
+    ToggleQuestionOption(usize, usize),
+    /// Submit all question answers
+    SubmitAllAnswers(QuestionAnswers),
 }
 
 /// SessionView - Main terminal view for a single session
@@ -127,8 +131,10 @@ pub struct SessionView {
     last_message_timestamp: Option<String>,
     /// NodeRef to voice button for keyboard shortcut
     voice_button_ref: NodeRef,
-    /// Selected options for multi-select AskUserQuestion (indices)
-    multi_select_options: HashSet<usize>,
+    /// Selected options for multi-select questions, keyed by question index
+    multi_select_options: HashMap<usize, HashSet<usize>>,
+    /// Answers for each question in AskUserQuestion, keyed by question index
+    question_answers: QuestionAnswers,
 }
 
 impl Component for SessionView {
@@ -294,7 +300,8 @@ impl Component for SessionView {
             interim_transcription: None,
             last_message_timestamp: None,
             voice_button_ref: NodeRef::default(),
-            multi_select_options: HashSet::new(),
+            multi_select_options: HashMap::new(),
+            question_answers: HashMap::new(),
         }
     }
 
@@ -463,7 +470,10 @@ impl Component for SessionView {
             SessionViewMsg::PermissionRequest(perm) => {
                 self.pending_permission = Some(perm);
                 self.permission_selected = 0; // Default to "Allow"
-                                              // Permission requests count as "awaiting" - notify parent
+                                              // Clear any previous question state
+                self.question_answers.clear();
+                self.multi_select_options.clear();
+                // Permission requests count as "awaiting" - notify parent
                 let session_id = ctx.props().session.id;
                 ctx.props().on_awaiting_change.emit((session_id, true));
                 // Focus the permission prompt after render
@@ -530,29 +540,12 @@ impl Component for SessionView {
                 if let Some(ref perm) = self.pending_permission {
                     // Check if this is an AskUserQuestion
                     if perm.tool_name == "AskUserQuestion" {
-                        if let Some(parsed) = parse_ask_user_question(&perm.input) {
-                            if let Some(q) = parsed.questions.first() {
-                                if q.multi_select {
-                                    // For multi-select, build answer from selected indices
-                                    let answer: String = self
-                                        .multi_select_options
-                                        .iter()
-                                        .filter_map(|&idx| {
-                                            q.options.get(idx).map(|o| o.label.clone())
-                                        })
-                                        .collect::<Vec<_>>()
-                                        .join(", ");
-                                    ctx.link()
-                                        .send_message(SessionViewMsg::AnswerQuestion(answer));
-                                } else {
-                                    // For single-select, get the selected option
-                                    if let Some(opt) = q.options.get(self.permission_selected) {
-                                        ctx.link().send_message(SessionViewMsg::AnswerQuestion(
-                                            opt.label.clone(),
-                                        ));
-                                    }
-                                }
-                            }
+                        // For AskUserQuestion, submit all collected answers
+                        // Only submit if we have answers (Enter key pressed when ready)
+                        if !self.question_answers.is_empty() {
+                            ctx.link().send_message(SessionViewMsg::SubmitAllAnswers(
+                                self.question_answers.clone(),
+                            ));
                         }
                     } else {
                         // Regular permission handling
@@ -932,29 +925,49 @@ impl Component for SessionView {
                 }
                 false
             }
-            SessionViewMsg::AnswerQuestion(answer) => {
+            SessionViewMsg::SetQuestionAnswer(question_idx, answer) => {
+                // Store answer for this question
+                self.question_answers.insert(question_idx, answer);
+                // Clear multi-select options for this question since answer is now set
+                self.multi_select_options.remove(&question_idx);
+                true
+            }
+            SessionViewMsg::ToggleQuestionOption(question_idx, option_idx) => {
+                // Get or create the set for this question
+                let options = self.multi_select_options.entry(question_idx).or_default();
+                if options.contains(&option_idx) {
+                    options.remove(&option_idx);
+                } else {
+                    options.insert(option_idx);
+                }
+                true
+            }
+            SessionViewMsg::SubmitAllAnswers(answers) => {
                 if let Some(perm) = self.pending_permission.take() {
                     if let Some(ref sender_rc) = self.ws_sender {
                         let sender_rc = sender_rc.clone();
-                        // Parse the question to get the question text as key
-                        let answers = if let Some(parsed) = parse_ask_user_question(&perm.input) {
-                            if let Some(q) = parsed.questions.first() {
-                                serde_json::json!({
-                                    "answers": {
-                                        q.question.clone(): answer
+
+                        // Build answers object with question text as keys
+                        let answers_json =
+                            if let Some(parsed) = parse_ask_user_question(&perm.input) {
+                                let mut answers_map = serde_json::Map::new();
+                                for (idx, answer) in answers.iter() {
+                                    if let Some(q) = parsed.questions.get(*idx) {
+                                        answers_map.insert(
+                                            q.question.clone(),
+                                            serde_json::Value::String(answer.clone()),
+                                        );
                                     }
-                                })
+                                }
+                                serde_json::json!({ "answers": answers_map })
                             } else {
-                                serde_json::json!({ "answers": { "": answer } })
-                            }
-                        } else {
-                            serde_json::json!({ "answers": { "": answer } })
-                        };
+                                serde_json::json!({ "answers": {} })
+                            };
 
                         let msg = ProxyMessage::PermissionResponse {
                             request_id: perm.request_id,
                             allow: true,
-                            input: Some(answers),
+                            input: Some(answers_json),
                             permissions: vec![],
                             reason: None,
                         };
@@ -968,22 +981,15 @@ impl Component for SessionView {
                             }
                         });
                     }
-                    // Clear multi-select state
+                    // Clear all question state
                     self.multi_select_options.clear();
+                    self.question_answers.clear();
                     // Recheck awaiting state
                     ctx.link().send_message(SessionViewMsg::CheckAwaiting);
                     // Focus back to input
                     if let Some(input) = self.input_ref.cast::<HtmlInputElement>() {
                         let _ = input.focus();
                     }
-                }
-                true
-            }
-            SessionViewMsg::ToggleQuestionOption(index) => {
-                if self.multi_select_options.contains(&index) {
-                    self.multi_select_options.remove(&index);
-                } else {
-                    self.multi_select_options.insert(index);
                 }
                 true
             }
@@ -1039,20 +1045,23 @@ impl Component for SessionView {
                         let on_select_down = link.callback(|_| SessionViewMsg::PermissionSelectDown);
                         let on_confirm = link.callback(|_| SessionViewMsg::PermissionConfirm);
                         let on_select_and_confirm = link.callback(SessionViewMsg::PermissionSelectAndConfirm);
-                        let on_answer = link.callback(SessionViewMsg::AnswerQuestion);
-                        let on_toggle_option = link.callback(SessionViewMsg::ToggleQuestionOption);
+                        let on_submit_answers = link.callback(SessionViewMsg::SubmitAllAnswers);
+                        let on_set_answer = link.callback(|(q_idx, answer)| SessionViewMsg::SetQuestionAnswer(q_idx, answer));
+                        let on_toggle_option = link.callback(|(q_idx, opt_idx)| SessionViewMsg::ToggleQuestionOption(q_idx, opt_idx));
 
                         html! {
                             <PermissionDialog
                                 permission={perm.clone()}
                                 selected={self.permission_selected}
                                 multi_select_options={self.multi_select_options.clone()}
+                                question_answers={self.question_answers.clone()}
                                 dialog_ref={self.permission_ref.clone()}
                                 {on_select_up}
                                 {on_select_down}
                                 {on_confirm}
                                 {on_select_and_confirm}
-                                {on_answer}
+                                {on_submit_answers}
+                                {on_set_answer}
                                 {on_toggle_option}
                             />
                         }

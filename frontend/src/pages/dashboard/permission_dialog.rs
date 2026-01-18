@@ -1,11 +1,12 @@
 //! Permission dialog components for tool authorization and user questions
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use web_sys::KeyboardEvent;
 use yew::prelude::*;
 
 use super::types::{
     format_permission_input, parse_ask_user_question, AskUserQuestionInput, PendingPermission,
+    QuestionAnswers,
 };
 
 /// Props for the PermissionDialog component
@@ -13,11 +14,16 @@ use super::types::{
 pub struct PermissionDialogProps {
     /// The pending permission request to display
     pub permission: PendingPermission,
-    /// Currently selected option index
+    /// Currently selected option index (for single-question or standard permissions)
     pub selected: usize,
-    /// For multi-select questions: which options are selected
+    /// For multi-select questions: which options are selected (per question)
+    /// Key is question index, value is set of selected option indices
     #[prop_or_default]
-    pub multi_select_options: HashSet<usize>,
+    pub multi_select_options: HashMap<usize, HashSet<usize>>,
+    /// Answers for each question (for multi-question AskUserQuestion)
+    /// Key is question index, value is the selected answer
+    #[prop_or_default]
+    pub question_answers: QuestionAnswers,
     /// Reference to the dialog for focus management
     pub dialog_ref: NodeRef,
     /// Callback when user navigates up
@@ -28,10 +34,14 @@ pub struct PermissionDialogProps {
     pub on_confirm: Callback<()>,
     /// Callback when user selects and confirms an option by index (for click)
     pub on_select_and_confirm: Callback<usize>,
-    /// Callback when user answers a question (for AskUserQuestion)
-    pub on_answer: Callback<String>,
-    /// Callback to toggle a multi-select option
-    pub on_toggle_option: Callback<usize>,
+    /// Callback when user submits all answers (sends HashMap of question->answer)
+    pub on_submit_answers: Callback<QuestionAnswers>,
+    /// Callback when user selects an answer for a specific question
+    /// (question_index, answer)
+    pub on_set_answer: Callback<(usize, String)>,
+    /// Callback to toggle a multi-select option for a specific question
+    /// (question_index, option_index)
+    pub on_toggle_option: Callback<(usize, usize)>,
 }
 
 /// Permission dialog component - handles both regular permissions and AskUserQuestion
@@ -137,27 +147,49 @@ fn render_standard_permission(props: &PermissionDialogProps) -> Html {
     }
 }
 
-/// Render the AskUserQuestion specialized UI
+/// Render the AskUserQuestion specialized UI - supports multiple questions
 fn render_ask_user_question(props: &PermissionDialogProps, parsed: &AskUserQuestionInput) -> Html {
-    let on_select_up = props.on_select_up.clone();
-    let on_select_down = props.on_select_down.clone();
-    let on_confirm = props.on_confirm.clone();
+    let total_questions = parsed.questions.len();
+    let answers_count = props.question_answers.len();
 
-    let onkeydown = Callback::from(move |e: KeyboardEvent| match e.key().as_str() {
-        "ArrowUp" | "k" => {
+    // Check if all questions have been answered
+    let all_answered = answers_count >= total_questions;
+
+    // For keyboard navigation, we don't use the standard up/down since we have multiple questions
+    let on_submit = props.on_submit_answers.clone();
+    let answers_for_submit = props.question_answers.clone();
+
+    let onkeydown = Callback::from(move |e: KeyboardEvent| {
+        // Only handle Enter to submit when all answered
+        if e.key() == "Enter" && answers_for_submit.len() >= total_questions {
             e.prevent_default();
-            on_select_up.emit(());
+            on_submit.emit(answers_for_submit.clone());
         }
-        "ArrowDown" | "j" => {
-            e.prevent_default();
-            on_select_down.emit(());
-        }
-        "Enter" | " " => {
-            e.prevent_default();
-            on_confirm.emit(());
-        }
-        _ => {}
     });
+
+    // Prepare submit button callback
+    let on_submit_click = props.on_submit_answers.clone();
+    let answers_for_button = props.question_answers.clone();
+    let submit_onclick = Callback::from(move |_| {
+        on_submit_click.emit(answers_for_button.clone());
+    });
+    let button_text = if all_answered {
+        format!(
+            "Submit {} Answer{}",
+            answers_count,
+            if answers_count == 1 { "" } else { "s" }
+        )
+    } else {
+        format!(
+            "Answer {} more question{}",
+            total_questions - answers_count,
+            if total_questions - answers_count == 1 {
+                ""
+            } else {
+                "s"
+            }
+        )
+    };
 
     html! {
         <div
@@ -167,10 +199,20 @@ fn render_ask_user_question(props: &PermissionDialogProps, parsed: &AskUserQuest
             {onkeydown}
         >
             {
-                parsed.questions.iter().map(|q| {
+                parsed.questions.iter().enumerate().map(|(q_idx, q)| {
                     let is_multi = q.multi_select;
+                    let current_answer = props.question_answers.get(&q_idx);
+                    let is_answered = current_answer.is_some();
+                    let multi_selected = props.multi_select_options.get(&q_idx).cloned().unwrap_or_default();
+
+                    let question_class = if is_answered {
+                        "question-container answered"
+                    } else {
+                        "question-container"
+                    };
+
                     html! {
-                        <div class="question-container">
+                        <div class={question_class}>
                             {
                                 if !q.header.is_empty() {
                                     html! {
@@ -183,26 +225,45 @@ fn render_ask_user_question(props: &PermissionDialogProps, parsed: &AskUserQuest
                                                     html! {}
                                                 }
                                             }
-                                        </div>
-                                    }
-                                } else if is_multi {
-                                    html! {
-                                        <div class="question-header-badge">
-                                            <span class="multi-badge">{ "multi-select" }</span>
+                                            {
+                                                if let Some(answer) = current_answer {
+                                                    html! { <span class="answer-badge">{ format!("✓ {}", answer) }</span> }
+                                                } else {
+                                                    html! {}
+                                                }
+                                            }
                                         </div>
                                     }
                                 } else {
-                                    html! {}
+                                    html! {
+                                        <div class="question-header-badge">
+                                            {
+                                                if is_multi {
+                                                    html! { <span class="multi-badge">{ "multi-select" }</span> }
+                                                } else {
+                                                    html! {}
+                                                }
+                                            }
+                                            {
+                                                if let Some(answer) = current_answer {
+                                                    html! { <span class="answer-badge">{ format!("✓ {}", answer) }</span> }
+                                                } else {
+                                                    html! {}
+                                                }
+                                            }
+                                        </div>
+                                    }
                                 }
                             }
                             <div class="question-text">{ &q.question }</div>
                             <div class="question-options">
                                 {
-                                    q.options.iter().enumerate().map(|(i, opt)| {
+                                    q.options.iter().enumerate().map(|(opt_idx, opt)| {
                                         let is_selected = if is_multi {
-                                            props.multi_select_options.contains(&i)
+                                            multi_selected.contains(&opt_idx)
                                         } else {
-                                            i == props.selected
+                                            // For single-select, check if this is the current answer
+                                            current_answer.map(|a| a == &opt.label).unwrap_or(false)
                                         };
                                         let item_class = if is_selected {
                                             "question-option selected"
@@ -210,12 +271,12 @@ fn render_ask_user_question(props: &PermissionDialogProps, parsed: &AskUserQuest
                                             "question-option"
                                         };
                                         let label_clone = opt.label.clone();
-                                        let on_answer = props.on_answer.clone();
+                                        let on_set_answer = props.on_set_answer.clone();
                                         let on_toggle = props.on_toggle_option.clone();
                                         let onclick = if is_multi {
-                                            Callback::from(move |_| on_toggle.emit(i))
+                                            Callback::from(move |_| on_toggle.emit((q_idx, opt_idx)))
                                         } else {
-                                            Callback::from(move |_| on_answer.emit(label_clone.clone()))
+                                            Callback::from(move |_| on_set_answer.emit((q_idx, label_clone.clone())))
                                         };
                                         let icon = if is_selected {
                                             if is_multi { "☑" } else { "●" }
@@ -244,11 +305,11 @@ fn render_ask_user_question(props: &PermissionDialogProps, parsed: &AskUserQuest
                                 }
                             </div>
                             {
-                                // Show submit button for multi-select
-                                if is_multi {
+                                // For multi-select questions, show a "Set Answer" button
+                                if is_multi && !multi_selected.is_empty() {
                                     let options_clone = q.options.clone();
-                                    let multi_select_clone = props.multi_select_options.clone();
-                                    let on_answer = props.on_answer.clone();
+                                    let multi_select_clone = multi_selected.clone();
+                                    let on_set_answer = props.on_set_answer.clone();
                                     let onclick = Callback::from(move |_| {
                                         // Build comma-separated answer from selected indices
                                         let answer: String = multi_select_clone
@@ -256,11 +317,11 @@ fn render_ask_user_question(props: &PermissionDialogProps, parsed: &AskUserQuest
                                             .filter_map(|&idx| options_clone.get(idx).map(|o| o.label.clone()))
                                             .collect::<Vec<_>>()
                                             .join(", ");
-                                        on_answer.emit(answer);
+                                        on_set_answer.emit((q_idx, answer));
                                     });
                                     html! {
-                                        <button class="submit-answer" {onclick} disabled={props.multi_select_options.is_empty()}>
-                                            { "Submit" }
+                                        <button class="set-answer-btn" {onclick}>
+                                            { "Set Answer" }
                                         </button>
                                     }
                                 } else {
@@ -271,8 +332,17 @@ fn render_ask_user_question(props: &PermissionDialogProps, parsed: &AskUserQuest
                     }
                 }).collect::<Html>()
             }
+            <div class="question-submit-section">
+                <button
+                    class="submit-all-answers"
+                    onclick={submit_onclick}
+                    disabled={!all_answered}
+                >
+                    { button_text }
+                </button>
+            </div>
             <div class="question-hint">
-                { "Click an option or use ↑↓ and Enter" }
+                { "Click options to answer each question, then submit" }
             </div>
         </div>
     }
