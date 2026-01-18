@@ -689,9 +689,7 @@ pub fn dashboard_page() -> Html {
     let on_keydown = {
         let on_navigate = on_navigate.clone();
         let on_next_active = on_next_active.clone();
-        let on_toggle_pause = on_toggle_pause.clone();
         let on_select_session = on_select_session.clone();
-        let focused_index = focused_index.clone();
         let nav_mode = nav_mode.clone();
         let active_sessions = active_sessions.clone();
         Callback::from(move |e: KeyboardEvent| {
@@ -701,15 +699,6 @@ pub fn dashboard_page() -> Html {
             if e.shift_key() && e.key() == "Tab" {
                 e.prevent_default();
                 on_next_active.emit(());
-                return;
-            }
-
-            // Ctrl+Shift+P toggles pause (works in both modes)
-            if e.ctrl_key() && e.shift_key() && (e.key() == "P" || e.key() == "p") {
-                e.prevent_default();
-                if let Some(session) = active_sessions.get(*focused_index) {
-                    on_toggle_pause.emit(session.id);
-                }
                 return;
             }
 
@@ -929,7 +918,6 @@ pub fn dashboard_page() -> Html {
                                         <>
                                             <span>{ "Esc = nav mode" }</span>
                                             <span>{ "Shift+Tab = next (skip paused)" }</span>
-                                            <span>{ "Ctrl+Shift+P = pause" }</span>
                                             if *voice_enabled {
                                                 <span>{ "Ctrl+M = voice" }</span>
                                             }
