@@ -40,7 +40,7 @@ This script:
 - Builds frontend
 - Starts backend in dev mode (auto-creates test user)
 - Starts proxy
-- Opens browser to http://localhost:3000/app/
+- Opens browser to http://localhost:3000/
 
 **Features:**
 - ✅ Auto-authentication (testing@testing.local)

@@ -38,6 +38,10 @@ SESSION_SECRET=generate-a-random-32-char-secret-here
 
 # Optional - Proxy binary path for downloads (auto-detected)
 # PROXY_BINARY_PATH=/app/claude-portal
+
+# Optional - Access control (restrict who can sign in)
+# ALLOWED_EMAIL_DOMAIN=yourcompany.com
+# ALLOWED_EMAILS=user1@gmail.com,user2@example.com
 ```
 
 ## Docker Deployment (Recommended)
@@ -220,5 +224,24 @@ GOOGLE_REDIRECT_URI=https://your-domain.com/auth/google/callback
 
 By default, any Google account can sign in. To restrict access:
 
-1. Use the admin panel (`/admin`) to disable unwanted users after they sign in
-2. For Google Workspace organizations, configure the OAuth consent screen as "Internal" to restrict to your domain
+**Option 1: Environment variables (recommended)**
+
+Set one or both of these environment variables:
+
+```bash
+# Allow only emails from a specific domain
+ALLOWED_EMAIL_DOMAIN=yourcompany.com
+
+# Allow specific email addresses (comma-separated)
+ALLOWED_EMAILS=user1@gmail.com,user2@example.com
+```
+
+If both are set, users matching either condition are allowed. Users not matching will see an "Access Denied" page.
+
+**Option 2: Admin panel**
+
+Use the admin panel (`/admin`) to disable unwanted users after they sign in.
+
+**Option 3: Google Workspace**
+
+For Google Workspace organizations, configure the OAuth consent screen as "Internal" to restrict to your domain.

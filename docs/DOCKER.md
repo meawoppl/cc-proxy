@@ -48,6 +48,10 @@ SESSION_SECRET=generate-a-random-32-char-secret-here
 
 # Optional - Path to proxy binary for downloads (auto-detected if not set)
 # PROXY_BINARY_PATH=/app/claude-portal
+
+# Optional - Access control (restrict who can sign in)
+# ALLOWED_EMAIL_DOMAIN=yourcompany.com
+# ALLOWED_EMAILS=user1@gmail.com,user2@example.com
 ```
 
 Run the container with the env file:
@@ -178,6 +182,8 @@ docker buildx build \
 | `APP_TITLE` | `Claude Code Sessions` | Title shown in browser tab |
 | `GOOGLE_APPLICATION_CREDENTIALS` | *(none)* | Path to GCP service account JSON for Speech-to-Text |
 | `PROXY_BINARY_PATH` | Auto-detected | Path to `claude-portal` binary for downloads |
+| `ALLOWED_EMAIL_DOMAIN` | *(none)* | Restrict sign-in to emails from this domain |
+| `ALLOWED_EMAILS` | *(none)* | Comma-separated list of allowed email addresses |
 
 ## Troubleshooting
 
