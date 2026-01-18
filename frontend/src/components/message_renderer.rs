@@ -927,6 +927,7 @@ fn render_read_tool(input: &Value) -> Html {
             <div class="tool-use-header">
                 <span class="tool-icon">{ "📖" }</span>
                 <span class="tool-name">{ "Read" }</span>
+                <span class="read-file-path">{ file_path }</span>
                 {
                     if let Some(range) = range_info {
                         html! { <span class="tool-meta">{ range }</span> }
@@ -935,7 +936,6 @@ fn render_read_tool(input: &Value) -> Html {
                     }
                 }
             </div>
-            <div class="file-path">{ file_path }</div>
         </div>
     }
 }
