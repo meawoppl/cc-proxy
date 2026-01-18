@@ -238,7 +238,7 @@ pub async fn run_connection_loop(
 
                 let pending = session.pending_count().await;
                 ui::print_disconnected_with_pending(session.backoff.current_secs(), pending);
-                info!(
+                warn!(
                     "WebSocket disconnected, {} pending messages, reconnecting in {}s",
                     pending,
                     session.backoff.current_secs()
