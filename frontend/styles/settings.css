@@ -262,6 +262,23 @@
     color: white;
 }
 
+.share-button {
+    background: transparent;
+    border: 1px solid var(--accent);
+    color: var(--accent);
+    padding: 0.25rem 0.75rem;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.8rem;
+    transition: all 0.2s;
+    margin-right: 0.5rem;
+}
+
+.share-button:hover {
+    background: var(--accent);
+    color: white;
+}
+
 /* Create Token Form */
 .create-token-form {
     background: var(--bg-darker);

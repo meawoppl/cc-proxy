@@ -1,4 +1,6 @@
+use crate::components::ShareDialog;
 use crate::utils;
+use crate::Route;
 use gloo_net::http::Request;
 use shared::{
     CreateProxyTokenRequest, CreateProxyTokenResponse, ProxyTokenInfo, ProxyTokenListResponse,
@@ -9,13 +11,11 @@ use wasm_bindgen_futures::spawn_local;
 use yew::prelude::*;
 use yew_router::prelude::*;
 
-use crate::Route;
-
 /// Settings page tabs
 #[derive(Clone, Copy, PartialEq)]
 enum SettingsTab {
-    Tokens,
     Sessions,
+    Tokens,
 }
 
 /// Calculate days until expiration from ISO date string
@@ -123,12 +123,14 @@ fn token_row(props: &TokenRowProps) -> Html {
 struct SessionRowProps {
     session: SessionInfo,
     on_delete: Callback<Uuid>,
+    on_share: Callback<Uuid>,
 }
 
 #[function_component(SessionRow)]
 fn session_row(props: &SessionRowProps) -> Html {
     let session = &props.session;
     let on_delete = props.on_delete.clone();
+    let on_share = props.on_share.clone();
     let session_id = session.id;
 
     let status_class = match session.status {
@@ -141,12 +143,20 @@ fn session_row(props: &SessionRowProps) -> Html {
         on_delete.emit(session_id);
     });
 
+    let session_id_for_share = session.id;
+    let on_share_click = Callback::from(move |_| {
+        on_share.emit(session_id_for_share);
+    });
+
     // Extract project name from working directory
     let project = session
         .working_directory
         .as_ref()
         .and_then(|dir| dir.split('/').next_back())
         .unwrap_or("Unknown");
+
+    // Only owners can share
+    let is_owner = session.my_role == "owner";
 
     html! {
         <tr class="session-row">
@@ -161,6 +171,11 @@ fn session_row(props: &SessionRowProps) -> Html {
             <td class="session-created">{ format_timestamp(&session.created_at) }</td>
             <td class={status_class}>{ session.status.as_str() }</td>
             <td class="session-actions">
+                if is_owner {
+                    <button class="share-button" onclick={on_share_click} title="Share session">
+                        { "Share" }
+                    </button>
+                }
                 <button class="delete-button" onclick={on_delete_click}>
                     { "Delete" }
                 </button>
@@ -179,7 +194,7 @@ struct NewTokenForm {
 #[function_component(SettingsPage)]
 pub fn settings_page() -> Html {
     let navigator = use_navigator().unwrap();
-    let active_tab = use_state(|| SettingsTab::Tokens);
+    let active_tab = use_state(|| SettingsTab::Sessions);
 
     // Token state
     let tokens = use_state(Vec::<ProxyTokenInfo>::new);
@@ -191,6 +206,7 @@ pub fn settings_page() -> Html {
     // Session state
     let sessions = use_state(Vec::<SessionInfo>::new);
     let sessions_loading = use_state(|| true);
+    let share_session_id = use_state(|| None::<Uuid>);
 
     // Confirmation modal state
     let confirm_action = use_state(|| None::<(String, Callback<MouseEvent>)>);
@@ -359,6 +375,22 @@ pub fn settings_page() -> Html {
         })
     };
 
+    // Share session handler
+    let on_share_session = {
+        let share_session_id = share_session_id.clone();
+        Callback::from(move |session_id: Uuid| {
+            share_session_id.set(Some(session_id));
+        })
+    };
+
+    // Close share dialog handler
+    let on_close_share = {
+        let share_session_id = share_session_id.clone();
+        Callback::from(move |_| {
+            share_session_id.set(None);
+        })
+    };
+
     // Create token handler
     let on_create_token = {
         let new_token_form = new_token_form.clone();
@@ -495,6 +527,13 @@ pub fn settings_page() -> Html {
 
             <nav class="settings-tabs">
                 <button
+                    class={classes!("tab-button", (*active_tab == SettingsTab::Sessions).then_some("active"))}
+                    onclick={on_sessions_tab}
+                >
+                    { "Sessions" }
+                    <span class="count-badge">{ sessions.len() }</span>
+                </button>
+                <button
                     class={classes!("tab-button", (*active_tab == SettingsTab::Tokens).then_some("active"))}
                     onclick={on_tokens_tab}
                 >
@@ -502,13 +541,6 @@ pub fn settings_page() -> Html {
                     if expiring_count > 0 {
                         <span class="expiring-badge">{ expiring_count }</span>
                     }
-                </button>
-                <button
-                    class={classes!("tab-button", (*active_tab == SettingsTab::Sessions).then_some("active"))}
-                    onclick={on_sessions_tab}
-                >
-                    { "Sessions" }
-                    <span class="count-badge">{ sessions.len() }</span>
                 </button>
             </nav>
 
@@ -659,6 +691,7 @@ pub fn settings_page() -> Html {
                                                     key={session.id.to_string()}
                                                     session={session.clone()}
                                                     on_delete={on_delete_session.clone()}
+                                                    on_share={on_share_session.clone()}
                                                 />
                                             }
                                         }) }
@@ -685,6 +718,14 @@ pub fn settings_page() -> Html {
                         </div>
                     </div>
                 </div>
+            }
+
+            // Share dialog
+            if let Some(session_id) = *share_session_id {
+                <ShareDialog
+                    session_id={session_id}
+                    on_close={on_close_share.clone()}
+                />
             }
         </div>
     }
