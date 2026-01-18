@@ -180,31 +180,31 @@ pub fn session_rail(props: &SessionRailProps) -> Html {
         }
     };
 
-    // Split sessions into active (connected and not paused) vs inactive (disconnected or paused)
-    let (active_indices, inactive_indices): (Vec<_>, Vec<_>) =
+    // Split sessions into visible (not paused) vs hidden (paused only)
+    // Disconnected sessions remain visible - only explicitly paused sessions go in the hidden section
+    let (visible_indices, paused_indices): (Vec<_>, Vec<_>) =
         props.sessions.iter().enumerate().partition(|(_, session)| {
-            let is_connected = props.connected_sessions.contains(&session.id);
             let is_paused = props.paused_sessions.contains(&session.id);
-            is_connected && !is_paused
+            !is_paused
         });
 
-    let inactive_count = inactive_indices.len();
+    let paused_count = paused_indices.len();
 
     // Calculate display numbers for visible sessions
-    // When inactive is hidden, only active sessions get numbers
-    // When inactive is shown, all sessions get numbers in display order
-    let active_count = active_indices.len();
+    // When paused section is hidden, only visible (non-paused) sessions get numbers
+    // When paused section is shown, all sessions get numbers in display order
+    let visible_count = visible_indices.len();
 
     html! {
         <div class="session-rail" ref={rail_ref}>
-            // Active sessions - always get numbers starting from 0
-            { active_indices.iter().enumerate().map(|(display_idx, (index, session))| {
+            // Visible sessions (not paused) - always get numbers starting from 0
+            { visible_indices.iter().enumerate().map(|(display_idx, (index, session))| {
                 render_pill(*index, session, Some(display_idx))
             }).collect::<Html>() }
 
-            // Divider (only show if there are inactive sessions)
+            // Divider (only show if there are paused sessions)
             {
-                if inactive_count > 0 {
+                if paused_count > 0 {
                     let toggle_class = classes!(
                         "session-rail-divider",
                         if props.inactive_hidden { Some("collapsed") } else { None }
@@ -212,9 +212,9 @@ pub fn session_rail(props: &SessionRailProps) -> Html {
                     html! {
                         <div class={toggle_class} onclick={props.on_toggle_inactive_hidden.clone()}>
                             <span class="divider-line"></span>
-                            <button class="divider-toggle" title={if props.inactive_hidden { "Show inactive sessions" } else { "Hide inactive sessions" }}>
+                            <button class="divider-toggle" title={if props.inactive_hidden { "Show paused sessions" } else { "Hide paused sessions" }}>
                                 { if props.inactive_hidden {
-                                    format!("▶ {}", inactive_count)
+                                    format!("▶ {}", paused_count)
                                 } else {
                                     "◀".to_string()
                                 }}
@@ -226,12 +226,12 @@ pub fn session_rail(props: &SessionRailProps) -> Html {
                 }
             }
 
-            // Inactive sessions (hidden when collapsed)
-            // When shown, continue numbering from where active sessions left off
+            // Paused sessions (hidden when collapsed)
+            // When shown, continue numbering from where visible sessions left off
             {
                 if !props.inactive_hidden {
-                    inactive_indices.iter().enumerate().map(|(display_idx, (index, session))| {
-                        render_pill(*index, session, Some(active_count + display_idx))
+                    paused_indices.iter().enumerate().map(|(display_idx, (index, session))| {
+                        render_pill(*index, session, Some(visible_count + display_idx))
                     }).collect::<Html>()
                 } else {
                     html! {}
