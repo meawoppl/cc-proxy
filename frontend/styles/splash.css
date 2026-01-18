@@ -76,10 +76,16 @@
     padding: 1rem;
     font-family: 'Courier New', monospace;
     text-align: left;
+    white-space: pre;
 }
 
 .terminal-line {
-    margin-bottom: 0.5rem;
+    margin-bottom: 0.25rem;
+    line-height: 1.4;
+}
+
+.terminal-line.empty {
+    height: 0.5rem;
 }
 
 .prompt {
@@ -92,7 +98,23 @@
 }
 
 .output {
+    color: var(--text-primary);
+}
+
+.output.green {
     color: var(--success);
+}
+
+.output.blue {
+    color: var(--accent);
+}
+
+.output.cyan {
+    color: #7dcfff;
+}
+
+.output.dim {
+    color: var(--text-secondary);
 }
 
 .cursor {
