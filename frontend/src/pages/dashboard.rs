@@ -689,9 +689,7 @@ pub fn dashboard_page() -> Html {
     let on_keydown = {
         let on_navigate = on_navigate.clone();
         let on_next_active = on_next_active.clone();
-        let on_toggle_pause = on_toggle_pause.clone();
         let on_select_session = on_select_session.clone();
-        let focused_index = focused_index.clone();
         let nav_mode = nav_mode.clone();
         let active_sessions = active_sessions.clone();
         Callback::from(move |e: KeyboardEvent| {
