@@ -269,3 +269,15 @@ pub enum DevicePollResponse {
     #[serde(rename = "denied")]
     Denied,
 }
+
+// ============================================================================
+// App Configuration (served to frontend)
+// ============================================================================
+
+/// Application configuration returned by /api/config endpoint
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AppConfig {
+    /// Custom title for the app (displayed in top bar)
+    /// Defaults to "Claude Code Sessions" if not configured
+    pub app_title: String,
+}
