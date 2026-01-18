@@ -259,6 +259,17 @@
     color: var(--text-secondary);
 }
 
+/* Actions column */
+.session-actions {
+    white-space: nowrap;
+    text-align: right;
+}
+
+.session-actions button {
+    display: inline-block;
+    vertical-align: middle;
+}
+
 /* Action buttons */
 .revoke-button,
 .delete-button {
