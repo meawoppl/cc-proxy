@@ -47,6 +47,7 @@ pub struct AppState {
     pub cookie_key: Key,
     pub jwt_secret: String,
     pub speech_credentials_path: Option<String>,
+    pub app_title: String,
 }
 
 #[tokio::main]
@@ -213,6 +214,9 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
+    // App title (customizable via environment variable)
+    let app_title = env::var("APP_TITLE").unwrap_or_else(|_| "Claude Code Sessions".to_string());
+
     // Create app state
     let app_state = Arc::new(AppState {
         dev_mode: args.dev_mode,
@@ -228,6 +232,7 @@ async fn main() -> anyhow::Result<()> {
         cookie_key,
         jwt_secret,
         speech_credentials_path,
+        app_title,
     });
 
     // Setup CORS
@@ -240,6 +245,8 @@ async fn main() -> anyhow::Result<()> {
     let mut app = Router::new()
         // Health check endpoint
         .route("/api/health", get(|| async { "OK" }))
+        // App configuration (public, no auth required)
+        .route("/api/config", get(handlers::config::get_config))
         // Session API routes
         .route("/api/sessions", get(handlers::sessions::list_sessions))
         .route("/api/sessions/:id", get(handlers::sessions::get_session))

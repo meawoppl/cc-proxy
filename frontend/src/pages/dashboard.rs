@@ -5,7 +5,7 @@ use futures_util::{SinkExt, StreamExt};
 use gloo::timers::callback::Timeout;
 use gloo_net::http::Request;
 use gloo_net::websocket::{futures::WebSocket, Message};
-use shared::{ProxyMessage, SessionCost, SessionInfo};
+use shared::{AppConfig, ProxyMessage, SessionCost, SessionInfo};
 use std::cell::RefCell;
 use std::collections::HashSet;
 use std::rc::Rc;
@@ -121,6 +121,8 @@ pub fn dashboard_page() -> Html {
     let total_user_spend = use_state(|| 0.0f64);
     let is_admin = use_state(|| false);
     let voice_enabled = use_state(|| false);
+    // App title from backend config (customizable via APP_TITLE env var)
+    let app_title = use_state(|| "Claude Code Sessions".to_string());
     // Track which sessions have been activated (focused at least once)
     // This prevents loading history for paused sessions until they're selected
     let activated_sessions = use_state(HashSet::<Uuid>::new);
@@ -142,6 +144,22 @@ pub fn dashboard_page() -> Html {
                         if let Some(voice) = data.get("voice_enabled").and_then(|v| v.as_bool()) {
                             voice_enabled.set(voice);
                         }
+                    }
+                }
+            });
+            || ()
+        });
+    }
+
+    // Fetch app configuration (title, etc.)
+    {
+        let app_title = app_title.clone();
+        use_effect_with((), move |_| {
+            spawn_local(async move {
+                let api_endpoint = utils::api_url("/api/config");
+                if let Ok(response) = Request::get(&api_endpoint).send().await {
+                    if let Ok(config) = response.json::<AppConfig>().await {
+                        app_title.set(config.app_title);
                     }
                 }
             });
@@ -752,7 +770,7 @@ pub fn dashboard_page() -> Html {
         <div class="focus-flow-container" onkeydown={on_keydown} tabindex="0">
             // Header with new session button
             <header class="focus-flow-header">
-                <h1>{ "Claude Code Sessions" }</h1>
+                <h1>{ (*app_title).clone() }</h1>
                 <div class="header-actions">
                     {
                         if *total_user_spend > 0.0 {
