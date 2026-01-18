@@ -215,35 +215,6 @@
     text-overflow: ellipsis;
 }
 
-.pill-branch {
-    font-size: 0.7rem;
-    color: var(--accent);
-    font-style: italic;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-
-.pill-branch::before {
-    content: "\1F33F ";  /* Seedling/branch emoji */
-    font-style: normal;
-}
-
-.session-pill.status-disconnected .pill-branch {
-    color: var(--text-secondary);
-}
-
-.pill-no-branch {
-    font-size: 0.7rem;
-    color: var(--error);
-    font-style: italic;
-    white-space: nowrap;
-}
-
-.session-pill.status-disconnected .pill-no-branch {
-    color: var(--text-secondary);
-}
-
 .pill-status {
     font-size: 0.6rem;
     line-height: 1;
