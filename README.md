@@ -1,12 +1,6 @@
-# Claude Code Portal
+# Claude Code Portal — Try It: [txcl.io](https://txcl.io)
 
 A web portal that extends [Claude Code](https://docs.anthropic.com/en/docs/claude-code) with session sharing, remote access, and collaborative features. Run Claude Code on powerful machines and access it from anywhere through your browser.
-
-## Try It Out
-
-**Live Demo**: [txcl.io](https://txcl.io)
-
-Sign in with Google to get started - your sessions are isolated and secure. This public instance is open to anyone.
 
 ## Features
 

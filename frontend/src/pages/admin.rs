@@ -239,12 +239,12 @@ fn user_row(props: &UserRowProps) -> Html {
                     { if user.is_admin { "Remove Admin" } else { "Make Admin" } }
                 </button>
                 <button
-                    class={classes!("disable-toggle", if user.disabled { Some("active") } else { None })}
+                    class={classes!("ban-toggle", if user.disabled { Some("active") } else { None })}
                     onclick={on_toggle_disabled}
                     disabled={is_self}
-                    title={if is_self { "Cannot disable your own account" } else if user.disabled { "Enable user" } else { "Disable user" }}
+                    title={if is_self { "Cannot ban your own account" } else if user.disabled { "Unban user" } else { "Ban user" }}
                 >
-                    { if user.disabled { "Enable" } else { "Disable" } }
+                    { if user.disabled { "Unban" } else { "Ban" } }
                 </button>
                 <button
                     class={classes!("voice-toggle", if user.voice_enabled { Some("active") } else { None })}
