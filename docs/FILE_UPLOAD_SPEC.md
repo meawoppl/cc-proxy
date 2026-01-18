@@ -4,37 +4,25 @@ This document outlines how to implement drag-and-drop file uploads from the web 
 
 ## Overview
 
-Users should be able to drag and drop files (or use a file picker) in the web dashboard to upload files to their local Claude Code session. Files are transmitted with progress tracking, and for large files, we can optionally use WebRTC for direct peer-to-peer transfer.
+Users should be able to drag and drop files (or use a file picker) in the web dashboard to upload files to their local Claude Code session. All file transfers use WebRTC DataChannels for direct peer-to-peer transfer, bypassing the server entirely. The WebSocket connection is used only for signaling.
 
-## Architecture Options
+## Architecture
 
-### Option A: WebSocket Relay (Simple, Works Everywhere)
-
-```
-Browser (drag/drop) → WebSocket → Backend → WebSocket → Proxy → Local filesystem
-```
-
-**Pros**: Simple, works behind NATs, no additional setup
-**Cons**: All data flows through server, higher latency, server bandwidth costs
-
-### Option B: WebRTC Direct Transfer (Optimal for Large Files)
+### WebRTC Direct Transfer
 
 ```
 Browser ←──WebRTC DataChannel──→ Proxy
          (signaling via WebSocket)
 ```
 
-**Pros**: Direct peer-to-peer, no server bandwidth, lower latency
-**Cons**: NAT traversal complexity, requires STUN/TURN, more implementation work
+**Pros**: Direct peer-to-peer, no server bandwidth, lower latency, progress tracking built-in
+**Cons**: NAT traversal complexity, requires STUN/TURN
 
-### Recommended: Hybrid Approach
-
-- **Small files (<1MB)**: Use WebSocket relay (simpler, fast enough)
-- **Large files (>1MB)**: Attempt WebRTC, fall back to WebSocket if connection fails
+All files are transferred via WebRTC regardless of size. This keeps the architecture simple (one code path) and avoids server bandwidth costs entirely.
 
 ## Protocol Messages
 
-### New ProxyMessage Variants
+### WebRTC Signaling Messages
 
 Add to `shared/src/lib.rs`:
 
@@ -44,47 +32,26 @@ Add to `shared/src/lib.rs`:
 pub enum ProxyMessage {
     // ... existing variants ...
 
-    // ========== Chunked Upload (WebSocket) ==========
+    // ========== WebRTC Signaling ==========
 
-    /// Browser → Proxy: Initiate file upload
-    FileUploadStart {
+    /// Browser → Proxy: Request to start file upload
+    FileUploadRequest {
         /// Unique ID for this upload
         upload_id: String,
         /// Relative path within working directory
         path: String,
         /// Total file size in bytes
         total_size: u64,
-        /// Number of chunks
-        total_chunks: u32,
         /// MIME type if known
         mime_type: Option<String>,
     },
 
-    /// Browser → Proxy: Send a chunk of file data
-    FileUploadChunk {
+    /// Proxy → Browser: Accept/reject upload request
+    FileUploadRequestAck {
         upload_id: String,
-        chunk_index: u32,
-        /// Base64-encoded chunk data
-        data_base64: String,
-    },
-
-    /// Proxy → Browser: Acknowledge chunk received
-    FileUploadChunkAck {
-        upload_id: String,
-        chunk_index: u32,
-        /// Bytes received so far
-        bytes_received: u64,
-    },
-
-    /// Proxy → Browser: Upload complete or failed
-    FileUploadResult {
-        upload_id: String,
-        path: String,
-        success: bool,
+        accepted: bool,
         error: Option<String>,
     },
-
-    // ========== WebRTC Signaling ==========
 
     /// Browser → Proxy: Offer to establish WebRTC connection
     WebRTCOffer {
@@ -105,81 +72,30 @@ pub enum ProxyMessage {
         sdp_mid: Option<String>,
         sdp_m_line_index: Option<u16>,
     },
+
+    /// Proxy → Browser: Upload complete or failed
+    FileUploadResult {
+        upload_id: String,
+        path: String,
+        success: bool,
+        error: Option<String>,
+    },
 }
 ```
 
-## Chunked Upload Protocol
-
-For progress tracking, files are split into chunks:
+## Upload Flow
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                     Upload Flow                              │
+│                  Complete Upload Flow                        │
 ├─────────────────────────────────────────────────────────────┤
 │                                                              │
 │  Browser                    Backend                  Proxy   │
 │     │                          │                       │     │
-│     │──FileUploadStart────────►│──────────────────────►│     │
-│     │                          │                       │     │
-│     │──FileUploadChunk[0]─────►│──────────────────────►│     │
-│     │◄─FileUploadChunkAck[0]───│◄──────────────────────│     │
-│     │                          │                       │     │
-│     │──FileUploadChunk[1]─────►│──────────────────────►│     │
-│     │◄─FileUploadChunkAck[1]───│◄──────────────────────│     │
-│     │                          │                       │     │
-│     │        ... more chunks ...                       │     │
-│     │                          │                       │     │
-│     │◄─FileUploadResult────────│◄──────────────────────│     │
-│                                                              │
-└─────────────────────────────────────────────────────────────┘
-```
-
-### Chunk Size
-
-- Default chunk size: 64 KB (65,536 bytes)
-- Base64 encoding overhead: ~33%, so wire size ~87 KB per chunk
-- Configurable based on connection quality
-
-### Progress Calculation
-
-```rust
-// Frontend progress tracking
-struct UploadProgress {
-    upload_id: String,
-    file_name: String,
-    total_bytes: u64,
-    bytes_sent: u64,
-    chunks_acked: u32,
-    total_chunks: u32,
-    started_at: DateTime<Utc>,
-}
-
-impl UploadProgress {
-    fn percent_complete(&self) -> f32 {
-        (self.bytes_sent as f32 / self.total_bytes as f32) * 100.0
-    }
-
-    fn estimated_time_remaining(&self) -> Duration {
-        let elapsed = Utc::now() - self.started_at;
-        let bytes_per_sec = self.bytes_sent as f64 / elapsed.num_seconds() as f64;
-        let remaining_bytes = self.total_bytes - self.bytes_sent;
-        Duration::seconds((remaining_bytes as f64 / bytes_per_sec) as i64)
-    }
-}
-```
-
-## WebRTC Direct Transfer
-
-For large files, WebRTC DataChannels provide direct peer-to-peer transfer:
-
-### Connection Flow
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                  WebRTC Connection Setup                     │
-├─────────────────────────────────────────────────────────────┤
-│                                                              │
-│  Browser                    Backend                  Proxy   │
+│     │──FileUploadRequest─────►│──────────────────────►│     │
+│     │                          │   (validate path,     │     │
+│     │                          │    check disk space)  │     │
+│     │◄─FileUploadRequestAck───│◄──────────────────────│     │
 │     │                          │                       │     │
 │     │ Create RTCPeerConnection │                       │     │
 │     │ Create DataChannel       │                       │     │
@@ -196,18 +112,71 @@ For large files, WebRTC DataChannels provide direct peer-to-peer transfer:
 │     │                          │                       │     │
 │     │════════ DataChannel Connected ═══════════════════│     │
 │     │                          │                       │     │
-│     │──────── Binary Data ────────────────────────────►│     │
-│     │◄─────── Progress Acks ──────────────────────────│     │
+│     │──────── Binary chunks ─────────────────────────►│     │
+│     │◄─────── Progress acks  ────────────────────────│     │
+│     │                          │                       │     │
+│     │◄─FileUploadResult────────│◄──────────────────────│     │
 │                                                              │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-### Proxy WebRTC Implementation
+## DataChannel Protocol
 
-The proxy needs a WebRTC library. Options for Rust:
+Once the WebRTC DataChannel is established, binary data flows directly between browser and proxy:
 
-1. **webrtc-rs**: Pure Rust implementation
-2. **libdatachannel**: C library with Rust bindings
+### Message Format (Binary)
+
+```rust
+// Header (8 bytes) + Data
+struct ChunkMessage {
+    chunk_index: u32,    // 4 bytes, big-endian
+    chunk_size: u32,     // 4 bytes, big-endian
+    data: Vec<u8>,       // Variable length
+}
+
+// Ack message from proxy (8 bytes)
+struct ChunkAck {
+    chunk_index: u32,    // 4 bytes, big-endian
+    total_received: u32, // 4 bytes, big-endian (cumulative bytes)
+}
+```
+
+### Chunk Size
+
+- Default chunk size: 64 KB (65,536 bytes)
+- Binary transfer (no base64 overhead)
+- Flow control via DataChannel bufferedAmount
+
+### Progress Tracking
+
+```rust
+// Frontend progress tracking
+struct UploadProgress {
+    upload_id: String,
+    file_name: String,
+    total_bytes: u64,
+    bytes_sent: u64,
+    bytes_acked: u64,
+    started_at: DateTime<Utc>,
+}
+
+impl UploadProgress {
+    fn percent_complete(&self) -> f32 {
+        (self.bytes_acked as f32 / self.total_bytes as f32) * 100.0
+    }
+
+    fn estimated_time_remaining(&self) -> Duration {
+        let elapsed = Utc::now() - self.started_at;
+        let bytes_per_sec = self.bytes_acked as f64 / elapsed.num_seconds() as f64;
+        let remaining_bytes = self.total_bytes - self.bytes_acked;
+        Duration::seconds((remaining_bytes as f64 / bytes_per_sec) as i64)
+    }
+}
+```
+
+## Proxy WebRTC Implementation
+
+The proxy needs a WebRTC library. Recommended: **webrtc-rs** (pure Rust).
 
 ```rust
 // proxy/src/webrtc.rs
@@ -217,13 +186,57 @@ use webrtc::data_channel::RTCDataChannel;
 
 pub struct FileReceiver {
     peer_connection: RTCPeerConnection,
-    data_channel: Option<RTCDataChannel>,
-    file_buffer: Vec<u8>,
+    upload_id: String,
+    target_path: PathBuf,
     expected_size: u64,
+    received_bytes: u64,
+    file_handle: Option<File>,
 }
 
 impl FileReceiver {
+    pub async fn new(
+        upload_id: String,
+        target_path: PathBuf,
+        expected_size: u64,
+    ) -> Result<Self, Error> {
+        let api = API::new(Default::default());
+        let config = RTCConfiguration {
+            ice_servers: vec![
+                RTCIceServer {
+                    urls: vec!["stun:stun.l.google.com:19302".to_string()],
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let peer_connection = api.new_peer_connection(config).await?;
+
+        Ok(Self {
+            peer_connection,
+            upload_id,
+            target_path,
+            expected_size,
+            received_bytes: 0,
+            file_handle: None,
+        })
+    }
+
     pub async fn handle_offer(&mut self, sdp: &str) -> Result<String, Error> {
+        // Set up data channel handler
+        let target_path = self.target_path.clone();
+        let expected_size = self.expected_size;
+
+        self.peer_connection.on_data_channel(Box::new(move |dc| {
+            let path = target_path.clone();
+            Box::pin(async move {
+                dc.on_message(Box::new(move |msg| {
+                    // Handle incoming chunks
+                    let data = msg.data.to_vec();
+                    // Parse header, write to file, send ack
+                }));
+            })
+        }));
+
         // Set remote description from browser's offer
         let offer = RTCSessionDescription::offer(sdp.to_string())?;
         self.peer_connection.set_remote_description(offer).await?;
@@ -236,18 +249,21 @@ impl FileReceiver {
     }
 
     pub async fn handle_ice_candidate(&mut self, candidate: &str) -> Result<(), Error> {
-        let candidate = RTCIceCandidateInit { candidate: candidate.to_string(), ..Default::default() };
+        let candidate = RTCIceCandidateInit {
+            candidate: candidate.to_string(),
+            ..Default::default()
+        };
         self.peer_connection.add_ice_candidate(candidate).await
     }
 }
 ```
 
-### NAT Traversal
+## NAT Traversal
 
-For WebRTC to work across NATs, we need:
+For WebRTC to work across NATs:
 
 1. **STUN Server**: For discovering public IP (can use public STUN servers)
-2. **TURN Server**: Relay fallback when direct connection fails (optional, costly)
+2. **TURN Server**: Relay fallback when direct connection fails
 
 ```rust
 // ICE server configuration
@@ -256,7 +272,7 @@ let ice_servers = vec![
         urls: vec!["stun:stun.l.google.com:19302".to_string()],
         ..Default::default()
     },
-    // Optional TURN server for fallback
+    // Optional TURN server for fallback when direct connection fails
     RTCIceServer {
         urls: vec!["turn:turn.example.com:3478".to_string()],
         username: "user".to_string(),
@@ -266,52 +282,29 @@ let ice_servers = vec![
 ];
 ```
 
-### Fallback Strategy
-
-```rust
-async fn upload_file(file: File, session: &Session) -> Result<(), Error> {
-    let file_size = file.size();
-
-    if file_size < 1_000_000 {
-        // Small file: use WebSocket directly
-        return upload_via_websocket(file, session).await;
-    }
-
-    // Large file: try WebRTC first
-    match establish_webrtc_connection(session).await {
-        Ok(data_channel) => {
-            upload_via_webrtc(file, data_channel).await
-        }
-        Err(e) => {
-            log::warn!("WebRTC failed, falling back to WebSocket: {}", e);
-            upload_via_websocket(file, session).await
-        }
-    }
-}
-```
+**Note**: Most connections will work with just STUN. TURN is only needed when both peers are behind symmetric NATs.
 
 ## Frontend Implementation
 
 ### 1. Drag and Drop Zone
 
-Add a drop zone overlay to the session view that appears when dragging files:
-
 ```rust
 // frontend/src/components/file_drop_zone.rs
 
 use gloo::file::{callbacks::FileReader, File};
-use web_sys::{DragEvent, FileList};
+use web_sys::{DragEvent, FileList, RtcPeerConnection, RtcDataChannel};
 use yew::prelude::*;
 
 #[derive(Properties, PartialEq)]
 pub struct FileDropZoneProps {
-    pub on_files_dropped: Callback<Vec<(String, Vec<u8>)>>,
+    pub session_id: String,
     pub children: Children,
 }
 
 #[function_component(FileDropZone)]
 pub fn file_drop_zone(props: &FileDropZoneProps) -> Html {
     let dragging = use_state(|| false);
+    let upload_progress = use_state(|| None::<UploadProgress>);
 
     let ondragover = {
         let dragging = dragging.clone();
@@ -330,14 +323,21 @@ pub fn file_drop_zone(props: &FileDropZoneProps) -> Html {
     };
 
     let ondrop = {
-        let on_files = props.on_files_dropped.clone();
+        let session_id = props.session_id.clone();
         let dragging = dragging.clone();
+        let upload_progress = upload_progress.clone();
+
         Callback::from(move |e: DragEvent| {
             e.prevent_default();
             dragging.set(false);
 
             if let Some(files) = e.data_transfer().and_then(|dt| dt.files()) {
-                // Process files...
+                for i in 0..files.length() {
+                    if let Some(file) = files.get(i) {
+                        // Start WebRTC upload for each file
+                        start_webrtc_upload(session_id.clone(), file, upload_progress.clone());
+                    }
+                }
             }
         })
     };
@@ -349,20 +349,101 @@ pub fn file_drop_zone(props: &FileDropZoneProps) -> Html {
             } else {
                 html! {}
             }}
+            { if let Some(progress) = &*upload_progress {
+                html! { <UploadProgressBar progress={progress.clone()} /> }
+            } else {
+                html! {}
+            }}
             { props.children.clone() }
         </div>
     }
 }
 ```
 
-### 2. File Reading
-
-Read dropped files and encode as base64:
+### 2. WebRTC Upload Logic
 
 ```rust
-async fn read_file_as_base64(file: File) -> Result<String, JsValue> {
-    let bytes = gloo::file::futures::read_as_bytes(&file).await?;
-    Ok(base64::encode(&bytes))
+// frontend/src/upload.rs
+
+async fn start_webrtc_upload(
+    session_id: String,
+    file: web_sys::File,
+    progress: UseStateHandle<Option<UploadProgress>>,
+) -> Result<(), JsValue> {
+    let upload_id = uuid::Uuid::new_v4().to_string();
+    let file_name = file.name();
+    let file_size = file.size() as u64;
+
+    // 1. Send upload request via WebSocket
+    send_message(ProxyMessage::FileUploadRequest {
+        upload_id: upload_id.clone(),
+        path: file_name.clone(),
+        total_size: file_size,
+        mime_type: Some(file.type_()),
+    }).await?;
+
+    // 2. Wait for acknowledgment
+    let ack = wait_for_message::<FileUploadRequestAck>(&upload_id).await?;
+    if !ack.accepted {
+        return Err(JsValue::from_str(&ack.error.unwrap_or_default()));
+    }
+
+    // 3. Create RTCPeerConnection
+    let config = RtcConfiguration::new();
+    config.set_ice_servers(&js_sys::Array::of1(
+        &JsValue::from_serde(&json!({
+            "urls": "stun:stun.l.google.com:19302"
+        })).unwrap()
+    ));
+
+    let pc = RtcPeerConnection::new_with_configuration(&config)?;
+
+    // 4. Create DataChannel
+    let dc = pc.create_data_channel("file-upload");
+    dc.set_binary_type(RtcDataChannelType::Arraybuffer);
+
+    // 5. Create and send offer
+    let offer = JsFuture::from(pc.create_offer()).await?;
+    JsFuture::from(pc.set_local_description(&offer.into())).await?;
+
+    send_message(ProxyMessage::WebRTCOffer {
+        upload_id: upload_id.clone(),
+        sdp: pc.local_description().unwrap().sdp(),
+    }).await?;
+
+    // 6. Handle answer and ICE candidates (via WebSocket)
+    // ...
+
+    // 7. Once DataChannel is open, send file chunks
+    let chunk_size = 64 * 1024; // 64 KB
+    let file_bytes = read_file_as_bytes(&file).await?;
+
+    for (i, chunk) in file_bytes.chunks(chunk_size).enumerate() {
+        // Wait for buffer to drain if needed
+        while dc.buffered_amount() > 1024 * 1024 {
+            gloo_timers::future::TimeoutFuture::new(10).await;
+        }
+
+        // Send chunk with header
+        let mut msg = Vec::with_capacity(8 + chunk.len());
+        msg.extend_from_slice(&(i as u32).to_be_bytes());
+        msg.extend_from_slice(&(chunk.len() as u32).to_be_bytes());
+        msg.extend_from_slice(chunk);
+
+        dc.send_with_u8_array(&msg)?;
+
+        // Update progress
+        progress.set(Some(UploadProgress {
+            upload_id: upload_id.clone(),
+            file_name: file_name.clone(),
+            total_bytes: file_size,
+            bytes_sent: ((i + 1) * chunk_size).min(file_size as usize) as u64,
+            bytes_acked: 0, // Updated when we receive acks
+            started_at: Utc::now(),
+        }));
+    }
+
+    Ok(())
 }
 ```
 
@@ -377,70 +458,30 @@ For drag-and-drop, files don't have path context. Options:
 
 ### Message Routing
 
-The backend simply forwards `FileUpload` messages from the browser WebSocket to the corresponding proxy WebSocket:
+The backend only handles signaling - no file data passes through:
 
 ```rust
 // In websocket handler
-ProxyMessage::FileUpload { path, content_base64, mime_type } => {
-    // Forward to proxy connection for this session
-    if let Some(proxy_tx) = session_manager.get_proxy_sender(&session_id) {
-        proxy_tx.send(message).await?;
-    }
-}
-```
-
-### Size Limits
-
-Add configuration for maximum file size:
-
-```rust
-const MAX_FILE_UPLOAD_SIZE: usize = 10 * 1024 * 1024; // 10 MB
-```
-
-Validate before forwarding.
-
-## Proxy Implementation
-
-### File Writing
-
-In `proxy/src/main.rs`, handle incoming file uploads:
-
-```rust
-ProxyMessage::FileUpload { path, content_base64, mime_type } => {
-    let result = handle_file_upload(&working_directory, &path, &content_base64).await;
-
-    // Send result back
-    let response = ProxyMessage::FileUploadResult {
-        path: path.clone(),
-        success: result.is_ok(),
-        error: result.err().map(|e| e.to_string()),
-    };
-    send_to_backend(response).await;
-}
-
-async fn handle_file_upload(
-    working_dir: &Path,
-    relative_path: &str,
-    content_base64: &str,
-) -> Result<(), Box<dyn Error>> {
-    // Security: Validate path doesn't escape working directory
-    let full_path = working_dir.join(relative_path);
-    if !full_path.starts_with(working_dir) {
-        return Err("Invalid path: attempted directory traversal".into());
+match message {
+    ProxyMessage::FileUploadRequest { .. } |
+    ProxyMessage::WebRTCOffer { .. } |
+    ProxyMessage::WebRTCIceCandidate { .. } => {
+        // Forward signaling to proxy
+        if let Some(proxy_tx) = session_manager.get_proxy_sender(&session_id) {
+            proxy_tx.send(message).await?;
+        }
     }
 
-    // Decode base64
-    let content = base64::decode(content_base64)?;
-
-    // Create parent directories if needed
-    if let Some(parent) = full_path.parent() {
-        fs::create_dir_all(parent)?;
+    ProxyMessage::FileUploadRequestAck { .. } |
+    ProxyMessage::WebRTCAnswer { .. } |
+    ProxyMessage::FileUploadResult { .. } => {
+        // Forward signaling to browser
+        if let Some(browser_tx) = session_manager.get_browser_sender(&session_id) {
+            browser_tx.send(message).await?;
+        }
     }
 
-    // Write file
-    fs::write(&full_path, content)?;
-
-    Ok(())
+    // ... other message types
 }
 ```
 
@@ -479,22 +520,22 @@ Consider restricting uploadable file types:
 
 ### Size Limits
 
-- Individual file: 10 MB default
-- Total upload per session: 100 MB
+- Individual file: 100 MB default (larger is fine with WebRTC)
+- Total upload per session: 1 GB
 - Configurable via environment variables
 
 ### Rate Limiting
 
 Prevent abuse with upload rate limits:
 - Max 10 files per minute
-- Max 50 MB per minute
+- Max 500 MB per minute
 
 ## UI/UX Design
 
 ### Visual Feedback
 
 1. **Drag overlay**: Semi-transparent overlay when dragging files over the session
-2. **Upload progress**: Show progress bar for large files
+2. **Upload progress**: Show progress bar with percentage and ETA
 3. **Success/error toasts**: Notify user of upload results
 
 ### CSS Classes
@@ -529,25 +570,40 @@ Prevent abuse with upload rate limits:
     padding: 1rem;
     min-width: 300px;
 }
+
+.upload-progress .progress-bar {
+    height: 8px;
+    background: var(--bg-tertiary);
+    border-radius: 4px;
+    overflow: hidden;
+    margin-top: 0.5rem;
+}
+
+.upload-progress .progress-fill {
+    height: 100%;
+    background: var(--accent);
+    transition: width 0.1s ease;
+}
 ```
 
 ## Implementation Order
 
-1. **Protocol**: Add `FileUpload` and `FileUploadResult` to `shared/src/lib.rs`
-2. **Proxy**: Implement file writing with security checks
-3. **Backend**: Add message routing for file uploads
+1. **Protocol**: Add signaling messages to `shared/src/lib.rs`
+2. **Proxy**: Add webrtc-rs dependency, implement FileReceiver
+3. **Backend**: Add signaling message routing
 4. **Frontend**: Implement drag-and-drop zone component
-5. **Frontend**: Integrate drop zone into session view
-6. **Frontend**: Add upload progress and result notifications
-7. **Testing**: Test path traversal prevention, size limits, various file types
+5. **Frontend**: Implement WebRTC upload logic
+6. **Frontend**: Add upload progress UI
+7. **Testing**: Test NAT traversal, large files, error cases
 
 ## Future Enhancements
 
 - **Directory upload**: Support dragging folders (via `webkitdirectory`)
 - **Clipboard paste**: Support pasting images/files from clipboard
-- **Download files**: Allow downloading files from the session (reverse direction)
+- **Download files**: Allow downloading files from the session (reverse direction via WebRTC)
 - **File browser**: Show working directory contents, allow browsing
 - **Conflict handling**: Ask user before overwriting existing files
+- **Resume**: Support resuming interrupted uploads
 
 ## Testing
 
@@ -560,9 +616,11 @@ Prevent abuse with upload rate limits:
 5. Attempt path traversal (should fail)
 6. Upload file larger than limit (should fail with clear error)
 7. Upload to disconnected session (should show error)
+8. Test with peers on different networks (NAT traversal)
 
 ### Automated Testing
 
 - Unit tests for path validation
-- Unit tests for base64 encoding/decoding
-- Integration tests for WebSocket message flow
+- Unit tests for chunk message parsing
+- Integration tests for WebRTC signaling flow
+- E2E tests for complete upload flow
