@@ -246,6 +246,7 @@ pub fn dashboard_page() -> Html {
                     match WebSocket::open(&ws_endpoint) {
                         Ok(ws) => {
                             attempt = 0; // Reset on successful connection
+                            server_shutdown_reason.set(None); // Clear shutdown banner
                             let (_sender, mut receiver) = ws.split();
 
                             while let Some(msg) = receiver.next().await {
