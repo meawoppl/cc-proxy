@@ -306,7 +306,8 @@
     flex-wrap: wrap;
 }
 
-.edit-file-path {
+.edit-file-path,
+.read-file-path {
     color: var(--text-primary);
     font-weight: 500;
     word-break: break-all;
