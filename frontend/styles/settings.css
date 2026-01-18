@@ -259,6 +259,7 @@
     cursor: pointer;
     font-size: 0.8rem;
     transition: all 0.2s;
+
     /* Override dashboard.css absolute positioning */
     position: static;
     opacity: 1;
