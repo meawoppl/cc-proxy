@@ -243,6 +243,22 @@
     color: var(--error);
 }
 
+.session-status.active {
+    background: rgba(158, 206, 106, 0.25);
+    color: #9ece6a;
+    font-weight: 600;
+}
+
+.session-status.inactive {
+    background: rgba(224, 175, 104, 0.2);
+    color: #e0af68;
+}
+
+.session-status.disconnected {
+    background: rgba(127, 132, 156, 0.2);
+    color: var(--text-secondary);
+}
+
 /* Action buttons */
 .revoke-button,
 .delete-button {
