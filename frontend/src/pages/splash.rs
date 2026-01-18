@@ -36,17 +36,58 @@ pub fn splash_page() -> Html {
                         <div class="terminal-body">
                             <div class="terminal-line">
                                 <span class="prompt">{ "$ " }</span>
-                                <span class="command">{ "claude-portal --session my-dev-machine" }</span>
+                                <span class="command">{ "claude-portal" }</span>
+                            </div>
+                            <div class="terminal-line empty"></div>
+                            <div class="terminal-line">
+                                <span class="output blue">{ "╭──────────────────────────────────────╮" }</span>
                             </div>
                             <div class="terminal-line">
-                                <span class="output">{ "✓ Connected to backend" }</span>
+                                <span class="output blue">{ "│      Claude Code Portal Starting     │" }</span>
                             </div>
                             <div class="terminal-line">
-                                <span class="output">{ "✓ Session registered" }</span>
+                                <span class="output blue">{ "╰──────────────────────────────────────╯" }</span>
+                            </div>
+                            <div class="terminal-line empty"></div>
+                            <div class="terminal-line">
+                                <span class="output dim">{ "  Session: " }</span>
+                                <span class="output">{ "my-workstation-20260117-041500" }</span>
                             </div>
                             <div class="terminal-line">
-                                <span class="prompt">{ "$ " }</span>
-                                <span class="cursor">{ "▊" }</span>
+                                <span class="output dim">{ "  Backend: " }</span>
+                                <span class="output">{ "wss://txcl.io" }</span>
+                            </div>
+                            <div class="terminal-line empty"></div>
+                            <div class="terminal-line">
+                                <span class="output blue">{ "  → " }</span>
+                                <span class="output">{ "Connecting to backend... " }</span>
+                                <span class="output green">{ "connected" }</span>
+                            </div>
+                            <div class="terminal-line">
+                                <span class="output blue">{ "  → " }</span>
+                                <span class="output">{ "Registering session... " }</span>
+                                <span class="output green">{ "registered" }</span>
+                            </div>
+                            <div class="terminal-line">
+                                <span class="output blue">{ "  → " }</span>
+                                <span class="output">{ "Starting Claude Code... " }</span>
+                                <span class="output green">{ "started" }</span>
+                            </div>
+                            <div class="terminal-line empty"></div>
+                            <div class="terminal-line">
+                                <span class="output green">{ "╭──────────────────────────────────────╮" }</span>
+                            </div>
+                            <div class="terminal-line">
+                                <span class="output green">{ "│         ✓ Proxy Ready                │" }</span>
+                            </div>
+                            <div class="terminal-line">
+                                <span class="output green">{ "╰──────────────────────────────────────╯" }</span>
+                            </div>
+                            <div class="terminal-line empty"></div>
+                            <div class="terminal-line">
+                                <span class="output">{ "  Navigate to " }</span>
+                                <span class="output cyan">{ "txcl.io" }</span>
+                                <span class="output">{ " to use the terminal." }</span>
                             </div>
                         </div>
                     </div>
