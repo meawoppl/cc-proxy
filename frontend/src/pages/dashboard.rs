@@ -897,6 +897,18 @@ pub fn dashboard_page() -> Html {
                 }
             }
 
+            // Footer with bug report link
+            <footer class="dashboard-footer">
+                <a
+                    href="https://github.com/meawoppl/cc-proxy/issues/new"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    class="footer-link bug-report"
+                >
+                    <span class="bug-icon">{ "🐛" }</span>
+                    { "Report a Bug" }
+                </a>
+            </footer>
         </div>
     }
 }
