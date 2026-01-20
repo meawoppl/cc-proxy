@@ -489,3 +489,354 @@ pub async fn complete_device_flow(
         Err(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_user_code_format() {
+        // Generate multiple codes and verify format
+        for _ in 0..100 {
+            let code = generate_user_code();
+
+            // Should be 7 characters: XXX-XXX
+            assert_eq!(code.len(), 7, "User code should be 7 characters: {}", code);
+
+            // Should have dash in the middle
+            assert_eq!(
+                &code[3..4],
+                "-",
+                "User code should have dash at position 3: {}",
+                code
+            );
+
+            // All characters (except dash) should be uppercase alphanumeric
+            for (i, c) in code.chars().enumerate() {
+                if i == 3 {
+                    continue; // Skip the dash
+                }
+                assert!(
+                    c.is_ascii_uppercase() || c.is_ascii_digit(),
+                    "Character at position {} should be uppercase alphanumeric: {} in {}",
+                    i,
+                    c,
+                    code
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_user_code_uniqueness() {
+        let mut codes = std::collections::HashSet::new();
+
+        // Generate 1000 codes and verify no collisions
+        for _ in 0..1000 {
+            let code = generate_user_code();
+            assert!(
+                codes.insert(code.clone()),
+                "User code collision detected: {}",
+                code
+            );
+        }
+    }
+
+    #[test]
+    fn test_device_code_format() {
+        // Generate multiple codes and verify format
+        for _ in 0..100 {
+            let code = generate_device_code();
+
+            // Should be 32 alphanumeric characters
+            assert_eq!(
+                code.len(),
+                32,
+                "Device code should be 32 characters: {}",
+                code
+            );
+
+            // All characters should be alphanumeric
+            for c in code.chars() {
+                assert!(
+                    c.is_ascii_alphanumeric(),
+                    "All device code characters should be alphanumeric: {} in {}",
+                    c,
+                    code
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_device_code_uniqueness() {
+        let mut codes = std::collections::HashSet::new();
+
+        // Generate 1000 codes and verify no collisions
+        for _ in 0..1000 {
+            let code = generate_device_code();
+            assert!(
+                codes.insert(code.clone()),
+                "Device code collision detected: {}",
+                code
+            );
+        }
+    }
+
+    #[test]
+    fn test_device_flow_state_transitions() {
+        // Test that DeviceFlowStatus can represent all states
+        let pending = DeviceFlowStatus::Pending;
+        let complete = DeviceFlowStatus::Complete;
+        let expired = DeviceFlowStatus::Expired;
+        let denied = DeviceFlowStatus::Denied;
+
+        assert_eq!(pending, DeviceFlowStatus::Pending);
+        assert_eq!(complete, DeviceFlowStatus::Complete);
+        assert_eq!(expired, DeviceFlowStatus::Expired);
+        assert_eq!(denied, DeviceFlowStatus::Denied);
+
+        // Different states should not be equal
+        assert_ne!(pending, complete);
+        assert_ne!(pending, expired);
+        assert_ne!(pending, denied);
+        assert_ne!(complete, expired);
+        assert_ne!(complete, denied);
+        assert_ne!(expired, denied);
+    }
+
+    #[test]
+    fn test_device_flow_state_creation() {
+        let device_code = generate_device_code();
+        let user_code = generate_user_code();
+        let expires_in = 300u64;
+        let expires_at = std::time::SystemTime::now() + std::time::Duration::from_secs(expires_in);
+
+        let state = DeviceFlowState {
+            device_code: device_code.clone(),
+            user_code: user_code.clone(),
+            user_id: None,
+            access_token: None,
+            expires_at,
+            status: DeviceFlowStatus::Pending,
+        };
+
+        assert_eq!(state.device_code, device_code);
+        assert_eq!(state.user_code, user_code);
+        assert!(state.user_id.is_none());
+        assert!(state.access_token.is_none());
+        assert_eq!(state.status, DeviceFlowStatus::Pending);
+    }
+
+    #[tokio::test]
+    async fn test_device_flow_store_operations() {
+        let store = DeviceFlowStore::default();
+
+        // Create a flow state
+        let device_code = generate_device_code();
+        let user_code = generate_user_code();
+        let expires_at = std::time::SystemTime::now() + std::time::Duration::from_secs(300);
+
+        let state = DeviceFlowState {
+            device_code: device_code.clone(),
+            user_code: user_code.clone(),
+            user_id: None,
+            access_token: None,
+            expires_at,
+            status: DeviceFlowStatus::Pending,
+        };
+
+        // Insert into store
+        {
+            let mut store_lock = store.write().await;
+            store_lock.insert(device_code.clone(), state);
+        }
+
+        // Verify we can retrieve it
+        {
+            let store_lock = store.read().await;
+            let retrieved = store_lock.get(&device_code);
+            assert!(retrieved.is_some());
+            let retrieved = retrieved.unwrap();
+            assert_eq!(retrieved.user_code, user_code);
+            assert_eq!(retrieved.status, DeviceFlowStatus::Pending);
+        }
+
+        // Verify we can find by user_code
+        {
+            let store_lock = store.read().await;
+            let found = store_lock
+                .values()
+                .find(|s| s.user_code == user_code && s.status == DeviceFlowStatus::Pending);
+            assert!(found.is_some());
+        }
+
+        // Update status to complete
+        {
+            let mut store_lock = store.write().await;
+            if let Some(state) = store_lock.get_mut(&device_code) {
+                state.status = DeviceFlowStatus::Complete;
+                state.user_id = Some(Uuid::new_v4());
+                state.access_token = Some("test-token".to_string());
+            }
+        }
+
+        // Verify updated state
+        {
+            let store_lock = store.read().await;
+            let retrieved = store_lock.get(&device_code).unwrap();
+            assert_eq!(retrieved.status, DeviceFlowStatus::Complete);
+            assert!(retrieved.user_id.is_some());
+            assert!(retrieved.access_token.is_some());
+        }
+    }
+
+    #[test]
+    fn test_poll_response_serialization() {
+        // Test Pending
+        let pending = PollResponse::Pending;
+        let json = serde_json::to_string(&pending).unwrap();
+        assert!(json.contains("\"status\":\"pending\""));
+
+        // Test Complete
+        let complete = PollResponse::Complete {
+            access_token: "test-token".to_string(),
+            user_id: "test-user-id".to_string(),
+            user_email: "test@example.com".to_string(),
+        };
+        let json = serde_json::to_string(&complete).unwrap();
+        assert!(json.contains("\"status\":\"complete\""));
+        assert!(json.contains("\"access_token\":\"test-token\""));
+        assert!(json.contains("\"user_id\":\"test-user-id\""));
+        assert!(json.contains("\"user_email\":\"test@example.com\""));
+
+        // Test Expired
+        let expired = PollResponse::Expired;
+        let json = serde_json::to_string(&expired).unwrap();
+        assert!(json.contains("\"status\":\"expired\""));
+
+        // Test Denied
+        let denied = PollResponse::Denied;
+        let json = serde_json::to_string(&denied).unwrap();
+        assert!(json.contains("\"status\":\"denied\""));
+    }
+
+    #[test]
+    fn test_device_code_response_serialization() {
+        let response = DeviceCodeResponse {
+            device_code: "abc123".to_string(),
+            user_code: "ABC-DEF".to_string(),
+            verification_uri: "https://example.com/device".to_string(),
+            expires_in: 300,
+            interval: 5,
+        };
+
+        let json = serde_json::to_string(&response).unwrap();
+        assert!(json.contains("\"device_code\":\"abc123\""));
+        assert!(json.contains("\"user_code\":\"ABC-DEF\""));
+        assert!(json.contains("\"verification_uri\":\"https://example.com/device\""));
+        assert!(json.contains("\"expires_in\":300"));
+        assert!(json.contains("\"interval\":5"));
+
+        // Verify it can be deserialized back
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["device_code"], "abc123");
+        assert_eq!(parsed["user_code"], "ABC-DEF");
+    }
+
+    #[test]
+    fn test_device_flow_error_serialization() {
+        let error = DeviceFlowError {
+            error: "not_found".to_string(),
+            message: "Device code not found".to_string(),
+        };
+
+        let json = serde_json::to_string(&error).unwrap();
+        assert!(json.contains("\"error\":\"not_found\""));
+        assert!(json.contains("\"message\":\"Device code not found\""));
+    }
+
+    #[test]
+    fn test_verify_query_deserialization() {
+        // With user_code
+        let json = r#"{"user_code": "ABC-123"}"#;
+        let query: VerifyQuery = serde_json::from_str(json).unwrap();
+        assert_eq!(query.user_code, Some("ABC-123".to_string()));
+
+        // Without user_code (should use None)
+        let json = r#"{}"#;
+        let query: VerifyQuery = serde_json::from_str(json).unwrap();
+        assert!(query.user_code.is_none());
+    }
+
+    #[test]
+    fn test_poll_request_deserialization() {
+        let json = r#"{"device_code": "abc123def456"}"#;
+        let request: PollRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(request.device_code, "abc123def456");
+    }
+
+    #[tokio::test]
+    async fn test_device_flow_expiration() {
+        let store = DeviceFlowStore::default();
+
+        // Create a flow state that's already expired
+        let device_code = generate_device_code();
+        let user_code = generate_user_code();
+        let expires_at = std::time::SystemTime::now() - std::time::Duration::from_secs(10); // Already expired
+
+        let state = DeviceFlowState {
+            device_code: device_code.clone(),
+            user_code: user_code.clone(),
+            user_id: None,
+            access_token: None,
+            expires_at,
+            status: DeviceFlowStatus::Pending,
+        };
+
+        // Insert into store
+        {
+            let mut store_lock = store.write().await;
+            store_lock.insert(device_code.clone(), state);
+        }
+
+        // Check that expiration detection works
+        {
+            let store_lock = store.read().await;
+            let state = store_lock.get(&device_code).unwrap();
+
+            // The actual expiration check happens in device_poll handler
+            let is_expired = std::time::SystemTime::now() > state.expires_at;
+            assert!(is_expired, "State should be detected as expired");
+        }
+    }
+
+    #[test]
+    fn test_device_code_form_html_content() {
+        // Verify the HTML form contains expected elements
+        assert!(
+            DEVICE_CODE_FORM_HTML.contains("Device Authentication"),
+            "Should contain title"
+        );
+        assert!(
+            DEVICE_CODE_FORM_HTML.contains("user_code"),
+            "Should contain user_code input"
+        );
+        assert!(
+            DEVICE_CODE_FORM_HTML.contains("<form"),
+            "Should contain form element"
+        );
+        assert!(
+            DEVICE_CODE_FORM_HTML.contains("/api/auth/device"),
+            "Should submit to device endpoint"
+        );
+        assert!(
+            DEVICE_CODE_FORM_HTML.contains("XXX-XXX"),
+            "Should show expected format"
+        );
+        assert!(
+            DEVICE_CODE_FORM_HTML.contains("pattern="),
+            "Should have input validation pattern"
+        );
+    }
+}
