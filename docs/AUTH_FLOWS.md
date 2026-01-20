@@ -86,10 +86,9 @@ Step 5: Backend handler (auth.rs:callback)
         ├── Create or update user in database
         ├── Check if user is banned
         │   └── BANNED → Redirect to /banned?reason=<encoded_reason>
-        ├── Check state parameter:
-        │   ├── Does state start with "device:"?
-        │   │   ├── YES → This is device flow (see Device Flow section)
-        │   │   └── NO  → This is web login, continue below
+        │
+        │   (Note: Callback also handles device flow, but web login
+        │    uses random CSRF token that won't match "device:" prefix)
         ↓
         Set session cookie:
         ├── Name: "cc_session"
@@ -472,6 +471,10 @@ Step 2.3a (DEV MODE): Backend handler (auth.rs:device_login)
 ---
 
 ## Shared Infrastructure
+
+**Important**: Both flows share a single OAuth callback endpoint (`/api/auth/google/callback`). The callback uses the `state` parameter to determine which flow initiated the request:
+- Random CSRF token → Web login → Redirect to `/dashboard`
+- `device:XXX-XXX` → Device flow → Redirect to `/api/auth/device?user_code=XXX-XXX`
 
 ### Session Cookie
 
