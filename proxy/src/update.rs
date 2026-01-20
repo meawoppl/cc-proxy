@@ -8,6 +8,8 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::fs;
 use tracing::info;
+#[cfg(windows)]
+use tracing::warn;
 
 /// GitHub repository for releases
 const GITHUB_REPO: &str = "meawoppl/claude-code-portal";
@@ -244,9 +246,8 @@ fn install_binary(self_path: &std::path::Path, new_binary: &[u8]) -> Result<()> 
         // Atomic rename on Unix
         fs::rename(&temp_path, self_path).context("Failed to replace binary")?;
         info!("Update installed successfully");
+        Ok(())
     }
-
-    Ok(())
 }
 
 /// Check for and apply pending updates (Windows only)
