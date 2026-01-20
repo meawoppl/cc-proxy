@@ -126,7 +126,7 @@ pub enum PollResponse {
 
 #[derive(Debug, Deserialize)]
 pub struct VerifyQuery {
-    pub user_code: String,
+    pub user_code: Option<String>,
 }
 
 fn generate_user_code() -> String {
@@ -256,9 +256,13 @@ pub async fn device_verify_page(
     State(app_state): State<Arc<AppState>>,
     Query(query): Query<VerifyQuery>,
 ) -> impl IntoResponse {
-    // In a real implementation, this would render an HTML page
-    // For now, redirect to OAuth flow with user_code in state
-    let user_code = query.user_code;
+    // If no user_code provided, show a form to enter it
+    let user_code = match query.user_code {
+        Some(code) => code,
+        None => {
+            return axum::response::Html(DEVICE_CODE_FORM_HTML.to_string()).into_response();
+        }
+    };
 
     // Check if user code exists
     let store = match &app_state.device_flow_store {
@@ -280,6 +284,125 @@ pub async fn device_verify_page(
     // Redirect to Google OAuth with user_code in state
     Redirect::temporary(&format!("/api/auth/google?device_user_code={}", user_code)).into_response()
 }
+
+const DEVICE_CODE_FORM_HTML: &str = r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Device Authentication - Claude Code Portal</title>
+    <style>
+        :root {
+            --bg-dark: #1a1b26;
+            --bg-darker: #16161e;
+            --text-primary: #c0caf5;
+            --text-secondary: #7f849c;
+            --accent: #7aa2f7;
+            --accent-hover: #9eb3ff;
+            --border: #292e42;
+            --success: #9ece6a;
+            --error: #f7768e;
+        }
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: var(--bg-dark);
+            color: var(--text-primary);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .container {
+            background: var(--bg-darker);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 2rem;
+            max-width: 400px;
+            width: 90%;
+            text-align: center;
+        }
+        h1 {
+            font-size: 1.5rem;
+            margin-bottom: 0.5rem;
+            color: var(--accent);
+        }
+        p {
+            color: var(--text-secondary);
+            margin-bottom: 1.5rem;
+            font-size: 0.9rem;
+        }
+        .code-input {
+            width: 100%;
+            padding: 1rem;
+            font-size: 1.5rem;
+            text-align: center;
+            background: var(--bg-dark);
+            border: 2px solid var(--border);
+            border-radius: 8px;
+            color: var(--text-primary);
+            font-family: 'Courier New', monospace;
+            letter-spacing: 0.25rem;
+            text-transform: uppercase;
+            margin-bottom: 1rem;
+        }
+        .code-input:focus {
+            outline: none;
+            border-color: var(--accent);
+        }
+        .code-input::placeholder {
+            color: var(--text-secondary);
+            letter-spacing: normal;
+            text-transform: none;
+        }
+        button {
+            width: 100%;
+            padding: 0.75rem 1.5rem;
+            font-size: 1rem;
+            background: var(--accent);
+            color: var(--bg-dark);
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 600;
+            transition: background 0.2s;
+        }
+        button:hover {
+            background: var(--accent-hover);
+        }
+        .hint {
+            margin-top: 1rem;
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Device Authentication</h1>
+        <p>Enter the code displayed in your terminal to authenticate this device.</p>
+        <form action="/api/auth/device" method="get">
+            <input
+                type="text"
+                name="user_code"
+                class="code-input"
+                placeholder="XXX-XXX"
+                pattern="[A-Za-z0-9]{3}-?[A-Za-z0-9]{3}"
+                maxlength="7"
+                required
+                autofocus
+            >
+            <button type="submit">Continue</button>
+        </form>
+        <p class="hint">The code is shown in your terminal after running <code>claude-portal</code></p>
+    </div>
+</body>
+</html>
+"#;
 
 // Called after OAuth success to complete device flow
 pub async fn complete_device_flow(
