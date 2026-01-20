@@ -88,6 +88,10 @@ pub struct DeviceFlowState {
     pub access_token: Option<String>,
     pub expires_at: std::time::SystemTime,
     pub status: DeviceFlowStatus,
+    /// Hostname of the machine requesting authorization
+    pub hostname: Option<String>,
+    /// Working directory / repository path
+    pub working_directory: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -137,6 +141,15 @@ pub struct VerifyQuery {
     pub user_code: Option<String>,
 }
 
+/// Request body for device code creation
+#[derive(Debug, Deserialize, Default)]
+pub struct DeviceCodeRequest {
+    /// Hostname of the machine requesting authorization
+    pub hostname: Option<String>,
+    /// Working directory / repository path
+    pub working_directory: Option<String>,
+}
+
 fn generate_user_code() -> String {
     let chars: String = rand::thread_rng()
         .sample_iter(&Alphanumeric)
@@ -160,11 +173,14 @@ fn generate_device_code() -> String {
 // POST /auth/device/code
 pub async fn device_code(
     State(app_state): State<Arc<AppState>>,
+    body: Option<Json<DeviceCodeRequest>>,
 ) -> Result<Json<DeviceCodeResponse>, DeviceFlowApiError> {
     let store = app_state
         .device_flow_store
         .as_ref()
         .ok_or_else(DeviceFlowApiError::service_unavailable)?;
+
+    let req = body.map(|b| b.0).unwrap_or_default();
     let device_code = generate_device_code();
     let user_code = generate_user_code();
 
@@ -178,6 +194,8 @@ pub async fn device_code(
         access_token: None,
         expires_at,
         status: DeviceFlowStatus::Pending,
+        hostname: req.hostname,
+        working_directory: req.working_directory,
     };
 
     let mut store_lock = store.write().await;
@@ -262,42 +280,368 @@ pub async fn device_verify_page(
         }
     };
 
-    // Check if user code exists
+    // Check if user code exists and get device info
     let store = match &app_state.device_flow_store {
         Some(s) => s,
         None => return Redirect::temporary("/").into_response(),
     };
     let store_lock = store.read().await;
-    let valid = store_lock
+    let device_info = store_lock
         .values()
-        .any(|state| state.user_code == user_code && state.status == DeviceFlowStatus::Pending);
+        .find(|state| state.user_code == user_code && state.status == DeviceFlowStatus::Pending);
 
+    let (hostname, working_directory) = match device_info {
+        Some(state) => (state.hostname.clone(), state.working_directory.clone()),
+        None => {
+            drop(store_lock);
+            return Redirect::temporary("/api/auth/device/error?message=Invalid+or+expired+code")
+                .into_response();
+        }
+    };
     drop(store_lock);
-
-    if !valid {
-        return Redirect::temporary("/api/auth/device/error?message=Invalid+or+expired+code")
-            .into_response();
-    }
 
     // Check if user is already logged in via session cookie
     if let Some(cookie) = cookies
         .signed(&app_state.cookie_key)
         .get(SESSION_COOKIE_NAME)
     {
-        if let Ok(user_id) = cookie.value().parse::<Uuid>() {
-            // User is already logged in - complete device flow directly
-            if let Ok(()) = complete_device_flow(&app_state, store, &user_code, user_id).await {
-                info!(
-                    "Device flow completed using existing session for user: {}",
-                    user_id
-                );
-                return Redirect::temporary("/api/auth/device/success").into_response();
-            }
+        if cookie.value().parse::<Uuid>().is_ok() {
+            // User is logged in - show approval page
+            let html = render_approval_page(
+                &user_code,
+                hostname.as_deref(),
+                working_directory.as_deref(),
+            );
+            return axum::response::Html(html).into_response();
         }
     }
 
     // User not logged in - redirect to Google OAuth with user_code in state
+    // After OAuth completes, they'll be redirected back here to see the approval page
     Redirect::temporary(&format!("/api/auth/google?device_user_code={}", user_code)).into_response()
+}
+
+/// POST /auth/device/approve - Approve device authorization
+#[derive(Debug, Deserialize)]
+pub struct ApproveRequest {
+    pub user_code: String,
+}
+
+pub async fn device_approve(
+    State(app_state): State<Arc<AppState>>,
+    cookies: Cookies,
+    Json(req): Json<ApproveRequest>,
+) -> Result<Json<serde_json::Value>, DeviceFlowApiError> {
+    // Verify user is logged in
+    let cookie = cookies
+        .signed(&app_state.cookie_key)
+        .get(SESSION_COOKIE_NAME)
+        .ok_or_else(|| DeviceFlowApiError {
+            status: StatusCode::UNAUTHORIZED,
+            error: "unauthorized".to_string(),
+            message: "You must be logged in to approve device authorization".to_string(),
+        })?;
+
+    let user_id: Uuid = cookie.value().parse().map_err(|_| DeviceFlowApiError {
+        status: StatusCode::UNAUTHORIZED,
+        error: "unauthorized".to_string(),
+        message: "Invalid session".to_string(),
+    })?;
+
+    let store = app_state
+        .device_flow_store
+        .as_ref()
+        .ok_or_else(DeviceFlowApiError::service_unavailable)?;
+
+    // Complete the device flow
+    complete_device_flow(&app_state, store, &req.user_code, user_id)
+        .await
+        .map_err(|_| DeviceFlowApiError::not_found("Device code not found or already used"))?;
+
+    info!(
+        "Device flow approved for user_code: {}, user: {}",
+        req.user_code, user_id
+    );
+
+    Ok(Json(serde_json::json!({
+        "success": true,
+        "message": "Device authorized successfully"
+    })))
+}
+
+/// POST /auth/device/deny - Deny device authorization
+pub async fn device_deny(
+    State(app_state): State<Arc<AppState>>,
+    cookies: Cookies,
+    Json(req): Json<ApproveRequest>,
+) -> Result<Json<serde_json::Value>, DeviceFlowApiError> {
+    // Verify user is logged in
+    let cookie = cookies
+        .signed(&app_state.cookie_key)
+        .get(SESSION_COOKIE_NAME)
+        .ok_or_else(|| DeviceFlowApiError {
+            status: StatusCode::UNAUTHORIZED,
+            error: "unauthorized".to_string(),
+            message: "You must be logged in to deny device authorization".to_string(),
+        })?;
+
+    let _user_id: Uuid = cookie.value().parse().map_err(|_| DeviceFlowApiError {
+        status: StatusCode::UNAUTHORIZED,
+        error: "unauthorized".to_string(),
+        message: "Invalid session".to_string(),
+    })?;
+
+    let store = app_state
+        .device_flow_store
+        .as_ref()
+        .ok_or_else(DeviceFlowApiError::service_unavailable)?;
+
+    // Mark the device flow as denied
+    let mut store_lock = store.write().await;
+    if let Some(state) = store_lock
+        .values_mut()
+        .find(|s| s.user_code == req.user_code && s.status == DeviceFlowStatus::Pending)
+    {
+        state.status = DeviceFlowStatus::Denied;
+        info!("Device flow denied for user_code: {}", req.user_code);
+    }
+
+    Ok(Json(serde_json::json!({
+        "success": true,
+        "message": "Device authorization denied"
+    })))
+}
+
+fn render_approval_page(
+    user_code: &str,
+    hostname: Option<&str>,
+    working_directory: Option<&str>,
+) -> String {
+    let hostname_display = hostname.unwrap_or("Unknown device");
+    let working_dir_display = working_directory
+        .map(|wd| {
+            // Extract just the last component (likely repo name)
+            std::path::Path::new(wd)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or(wd)
+        })
+        .unwrap_or("Unknown directory");
+
+    format!(
+        r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Approve Device - Claude Code Portal</title>
+    <style>
+        :root {{
+            --bg-dark: #1a1b26;
+            --bg-darker: #16161e;
+            --text-primary: #c0caf5;
+            --text-secondary: #7f849c;
+            --accent: #7aa2f7;
+            --accent-hover: #9eb3ff;
+            --border: #292e42;
+            --success: #9ece6a;
+            --error: #f7768e;
+            --warning: #e0af68;
+        }}
+        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+        body {{
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: var(--bg-dark);
+            color: var(--text-primary);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }}
+        .container {{
+            background: var(--bg-darker);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 2rem;
+            max-width: 450px;
+            width: 90%;
+            text-align: center;
+        }}
+        h1 {{
+            font-size: 1.5rem;
+            margin-bottom: 0.5rem;
+            color: var(--warning);
+        }}
+        .subtitle {{
+            color: var(--text-secondary);
+            margin-bottom: 1.5rem;
+            font-size: 0.9rem;
+        }}
+        .device-info {{
+            background: var(--bg-dark);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 1rem;
+            margin-bottom: 1.5rem;
+            text-align: left;
+        }}
+        .device-info .label {{
+            color: var(--text-secondary);
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-bottom: 0.25rem;
+        }}
+        .device-info .value {{
+            color: var(--text-primary);
+            font-family: 'Courier New', monospace;
+            font-size: 0.95rem;
+            margin-bottom: 0.75rem;
+            word-break: break-all;
+        }}
+        .device-info .value:last-child {{
+            margin-bottom: 0;
+        }}
+        .code-display {{
+            background: var(--bg-dark);
+            border: 2px solid var(--accent);
+            border-radius: 8px;
+            padding: 0.75rem;
+            font-family: 'Courier New', monospace;
+            font-size: 1.25rem;
+            letter-spacing: 0.2rem;
+            color: var(--accent);
+            margin-bottom: 1.5rem;
+        }}
+        .buttons {{
+            display: flex;
+            gap: 1rem;
+        }}
+        button {{
+            flex: 1;
+            padding: 0.75rem 1.5rem;
+            font-size: 1rem;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 600;
+            transition: all 0.2s;
+        }}
+        .approve {{
+            background: var(--success);
+            color: var(--bg-dark);
+        }}
+        .approve:hover {{
+            filter: brightness(1.1);
+        }}
+        .deny {{
+            background: transparent;
+            border: 1px solid var(--error);
+            color: var(--error);
+        }}
+        .deny:hover {{
+            background: var(--error);
+            color: var(--bg-dark);
+        }}
+        .warning {{
+            color: var(--text-secondary);
+            font-size: 0.8rem;
+            margin-top: 1rem;
+        }}
+        .result {{
+            display: none;
+            padding: 1rem;
+            border-radius: 8px;
+            margin-top: 1rem;
+        }}
+        .result.success {{
+            background: rgba(158, 206, 106, 0.1);
+            border: 1px solid var(--success);
+            color: var(--success);
+        }}
+        .result.error {{
+            background: rgba(247, 118, 142, 0.1);
+            border: 1px solid var(--error);
+            color: var(--error);
+        }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>⚠️ Authorize Device?</h1>
+        <p class="subtitle">A device is requesting access to your Claude Code sessions</p>
+
+        <div class="device-info">
+            <div class="label">Machine</div>
+            <div class="value">{hostname_display}</div>
+            <div class="label">Directory</div>
+            <div class="value">{working_dir_display}</div>
+        </div>
+
+        <div class="code-display">{user_code}</div>
+
+        <div class="buttons">
+            <button class="deny" onclick="denyDevice()">Deny</button>
+            <button class="approve" onclick="approveDevice()">Approve</button>
+        </div>
+
+        <div id="result" class="result"></div>
+
+        <p class="warning">Only approve if you initiated this request from your terminal.</p>
+    </div>
+
+    <script>
+        const userCode = "{user_code}";
+
+        async function approveDevice() {{
+            try {{
+                const response = await fetch('/api/auth/device/approve', {{
+                    method: 'POST',
+                    headers: {{ 'Content-Type': 'application/json' }},
+                    body: JSON.stringify({{ user_code: userCode }})
+                }});
+                const data = await response.json();
+                if (response.ok) {{
+                    showResult('success', 'Device authorized! You can close this page.');
+                    setTimeout(() => window.location.href = '/api/auth/device/success', 1500);
+                }} else {{
+                    showResult('error', data.message || 'Failed to authorize device');
+                }}
+            }} catch (e) {{
+                showResult('error', 'Network error: ' + e.message);
+            }}
+        }}
+
+        async function denyDevice() {{
+            try {{
+                const response = await fetch('/api/auth/device/deny', {{
+                    method: 'POST',
+                    headers: {{ 'Content-Type': 'application/json' }},
+                    body: JSON.stringify({{ user_code: userCode }})
+                }});
+                const data = await response.json();
+                if (response.ok) {{
+                    showResult('error', 'Device authorization denied.');
+                    setTimeout(() => window.location.href = '/', 1500);
+                }} else {{
+                    showResult('error', data.message || 'Failed to deny device');
+                }}
+            }} catch (e) {{
+                showResult('error', 'Network error: ' + e.message);
+            }}
+        }}
+
+        function showResult(type, message) {{
+            const result = document.getElementById('result');
+            result.className = 'result ' + type;
+            result.textContent = message;
+            result.style.display = 'block';
+            document.querySelector('.buttons').style.display = 'none';
+        }}
+    </script>
+</body>
+</html>"#
+    )
 }
 
 const DEVICE_CODE_FORM_HTML: &str = r#"<!DOCTYPE html>
@@ -619,6 +963,8 @@ mod tests {
             access_token: None,
             expires_at,
             status: DeviceFlowStatus::Pending,
+            hostname: Some("test-host".to_string()),
+            working_directory: Some("/home/user/project".to_string()),
         };
 
         assert_eq!(state.device_code, device_code);
@@ -626,6 +972,11 @@ mod tests {
         assert!(state.user_id.is_none());
         assert!(state.access_token.is_none());
         assert_eq!(state.status, DeviceFlowStatus::Pending);
+        assert_eq!(state.hostname, Some("test-host".to_string()));
+        assert_eq!(
+            state.working_directory,
+            Some("/home/user/project".to_string())
+        );
     }
 
     #[tokio::test]
@@ -644,6 +995,8 @@ mod tests {
             access_token: None,
             expires_at,
             status: DeviceFlowStatus::Pending,
+            hostname: Some("test-host".to_string()),
+            working_directory: Some("/test/dir".to_string()),
         };
 
         // Insert into store
@@ -792,6 +1145,8 @@ mod tests {
             access_token: None,
             expires_at,
             status: DeviceFlowStatus::Pending,
+            hostname: None,
+            working_directory: None,
         };
 
         // Insert into store

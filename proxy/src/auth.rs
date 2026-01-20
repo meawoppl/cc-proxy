@@ -34,10 +34,19 @@ enum PollResponse {
     Denied,
 }
 
-pub async fn device_flow_login(backend_url: &str) -> Result<(String, String, String)> {
+pub async fn device_flow_login(
+    backend_url: &str,
+    working_directory: Option<&str>,
+) -> Result<(String, String, String)> {
     let client = reqwest::Client::new();
 
-    // Step 1: Request device code
+    // Get hostname for device identification
+    let hostname = hostname::get()
+        .ok()
+        .and_then(|h| h.into_string().ok())
+        .unwrap_or_else(|| "unknown".to_string());
+
+    // Step 1: Request device code with device metadata
     let auth_base = backend_url
         .replace("ws://", "http://")
         .replace("wss://", "https://");
@@ -47,6 +56,10 @@ pub async fn device_flow_login(backend_url: &str) -> Result<(String, String, Str
 
     let http_response = client
         .post(&device_code_url)
+        .json(&serde_json::json!({
+            "hostname": hostname,
+            "working_directory": working_directory
+        }))
         .send()
         .await
         .context("Failed to request device code")?;

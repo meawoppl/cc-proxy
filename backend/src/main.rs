@@ -348,6 +348,14 @@ async fn main() -> anyhow::Result<()> {
             "/api/auth/device",
             get(handlers::device_flow::device_verify_page),
         )
+        .route(
+            "/api/auth/device/approve",
+            post(handlers::device_flow::device_approve),
+        )
+        .route(
+            "/api/auth/device/deny",
+            post(handlers::device_flow::device_deny),
+        )
         // WebSocket routes
         .route(
             "/ws/session",
