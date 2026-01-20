@@ -91,12 +91,12 @@ impl ConfigLock {
                     if let Ok(mut existing) = File::open(&lock_path) {
                         let mut pid_str = String::new();
                         if existing.read_to_string(&mut pid_str).is_ok() {
-                            if let Ok(pid) = pid_str.trim().parse::<u32>() {
+                            if let Ok(_pid) = pid_str.trim().parse::<u32>() {
                                 // Check if process is still running (Unix-specific)
                                 #[cfg(unix)]
                                 {
                                     // kill with signal 0 checks if process exists
-                                    if unsafe { libc::kill(pid as i32, 0) } != 0 {
+                                    if unsafe { libc::kill(_pid as i32, 0) } != 0 {
                                         // Process is dead, remove stale lock
                                         let _ = fs::remove_file(&lock_path);
                                         continue;
