@@ -416,7 +416,7 @@ async fn resolve_auth_token(
 
     // Need to authenticate
     info!("Authenticating via device flow");
-    let (token, user_id, user_email) = auth::device_flow_login(backend_url).await?;
+    let (token, user_id, user_email) = auth::device_flow_login(backend_url, Some(cwd)).await?;
 
     config.set_session_auth(
         cwd.to_string(),

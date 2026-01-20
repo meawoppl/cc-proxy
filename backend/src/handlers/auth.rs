@@ -168,20 +168,23 @@ pub async fn callback(
 
     // Check if this is part of a device flow
     if let Some(device_user_code) = query.state {
-        // Complete device flow
-        if let Some(ref store) = app_state.device_flow_store {
-            if let Ok(()) = crate::handlers::device_flow::complete_device_flow(
-                &app_state,
-                store,
-                &device_user_code,
-                user.id,
-            )
-            .await
-            {
-                info!("Device flow completed for user: {}", user.email);
-                return Ok(Redirect::temporary("/api/auth/device/success"));
-            }
-        }
+        // Set session cookie first so user is logged in
+        let mut cookie = Cookie::new(SESSION_COOKIE_NAME, user.id.to_string());
+        cookie.set_path("/");
+        cookie.set_http_only(true);
+        cookie.set_secure(!app_state.dev_mode);
+        cookie.set_same_site(SameSite::Lax);
+        cookies.signed(&app_state.cookie_key).add(cookie);
+
+        // Redirect back to device verify page to show approval UI
+        info!(
+            "OAuth complete for device flow, redirecting to approval page for user: {}",
+            user.email
+        );
+        return Ok(Redirect::temporary(&format!(
+            "/api/auth/device?user_code={}",
+            device_user_code
+        )));
     }
 
     // Set session cookie with user ID
