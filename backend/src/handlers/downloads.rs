@@ -138,7 +138,9 @@ fi
 echo "Configuring backend URL: ${{BACKEND_URL}}"
 cat > "${{CONFIG_FILE}}" << EOF
 {{
-  "backend_url": "${{BACKEND_URL}}"
+  "preferences": {{
+    "default_backend_url": "${{BACKEND_URL}}"
+  }}
 }}
 EOF
 echo ""
