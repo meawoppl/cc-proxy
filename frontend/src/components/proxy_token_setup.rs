@@ -104,23 +104,6 @@ pub fn proxy_token_setup() -> Html {
                 })}
             </div>
 
-            <div class="setup-step">
-                <span class="step-number">{ "1" }</span>
-                <div class="step-content">
-                    <p class="step-label">{ "Install:" }</p>
-                    <CopyCommand command={install_command} />
-                </div>
-            </div>
-
-            <div class="setup-step">
-                <span class="step-number">{ "2" }</span>
-                <div class="step-content">
-                    <p class="step-label">{ "Start a session:" }</p>
-                    <CopyCommand command={run_command} />
-                    <p class="step-hint">{ "(Opens browser to authenticate on first run)" }</p>
-                </div>
-            </div>
-
             <div class="setup-notes">
                 {if *selected_platform == Platform::Windows {
                     html! {
@@ -154,6 +137,23 @@ pub fn proxy_token_setup() -> Html {
                 } else {
                     html! {}
                 }}
+            </div>
+
+            <div class="setup-step">
+                <span class="step-number">{ "1" }</span>
+                <div class="step-content">
+                    <p class="step-label">{ "Install:" }</p>
+                    <CopyCommand command={install_command} />
+                </div>
+            </div>
+
+            <div class="setup-step">
+                <span class="step-number">{ "2" }</span>
+                <div class="step-content">
+                    <p class="step-label">{ "Start a session:" }</p>
+                    <CopyCommand command={run_command} />
+                    <p class="step-hint">{ "(Opens browser to authenticate on first run)" }</p>
+                </div>
             </div>
         </div>
     }
