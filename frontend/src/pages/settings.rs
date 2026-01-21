@@ -154,9 +154,13 @@ fn session_row(props: &SessionRowProps) -> Html {
     // Only owners can share
     let is_owner = session.my_role == "owner";
 
+    // Format session ID as short form (first 8 chars)
+    let short_id = &session.id.to_string()[..8];
+
     html! {
         <tr class="session-row">
             <td class="session-name" title={session.session_name.clone()}>{ project }</td>
+            <td class="session-id" title={session.id.to_string()}>{ short_id }</td>
             <td class="session-hostname">{ hostname }</td>
             <td class="session-directory" title={session.working_directory.clone()}>
                 { if session.working_directory.is_empty() { "—" } else { &session.working_directory } }
@@ -677,6 +681,7 @@ pub fn settings_page() -> Html {
                                     <thead>
                                         <tr>
                                             <th>{ "Project" }</th>
+                                            <th>{ "ID" }</th>
                                             <th>{ "Host" }</th>
                                             <th>{ "Directory" }</th>
                                             <th>{ "Branch" }</th>
