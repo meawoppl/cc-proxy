@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use claude_codes::io::{ContentBlock, ControlRequestPayload};
+use claude_codes::io::{ContentBlock, ControlRequestPayload, ToolUseBlock};
 use claude_codes::{AsyncClient, ClaudeInput, ClaudeOutput};
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
@@ -131,6 +131,16 @@ pub enum ConnectionResult {
     ClaudeExited,
     /// WebSocket disconnected, includes how long the connection was up
     Disconnected(Duration),
+    /// Session not found error - need to restart with fresh session
+    SessionNotFound,
+}
+
+/// Result from the connection loop
+pub enum LoopResult {
+    /// Normal exit (Claude process ended)
+    NormalExit,
+    /// Session not found - caller should restart with fresh session
+    SessionNotFound,
 }
 
 /// State that persists across WebSocket reconnections for a session.
@@ -214,7 +224,7 @@ pub async fn run_connection_loop(
     claude_client: &mut AsyncClient,
     input_tx: mpsc::UnboundedSender<String>,
     input_rx: &mut mpsc::UnboundedReceiver<String>,
-) -> Result<()> {
+) -> Result<LoopResult> {
     let mut session = SessionState::new(config, claude_client, input_tx, input_rx)?;
     session.log_pending_messages().await;
 
@@ -230,7 +240,12 @@ pub async fn run_connection_loop(
             ConnectionResult::ClaudeExited => {
                 info!("Claude process exited, shutting down");
                 session.persist_buffer().await;
-                return Ok(());
+                return Ok(LoopResult::NormalExit);
+            }
+            ConnectionResult::SessionNotFound => {
+                warn!("Session not found, need to restart with fresh session");
+                session.persist_buffer().await;
+                return Ok(LoopResult::SessionNotFound);
             }
             ConnectionResult::Disconnected(duration) => {
                 session.backoff.reset_if_stable(duration);
@@ -415,7 +430,7 @@ pub struct PermissionResponseData {
     pub request_id: String,
     pub allow: bool,
     pub input: Option<serde_json::Value>,
-    pub permissions: Vec<serde_json::Value>,
+    pub permissions: Vec<claude_codes::io::PermissionSuggestion>,
     pub reason: Option<String>,
 }
 
@@ -437,6 +452,8 @@ pub struct ConnectionState {
     pub connection_start: Instant,
     /// Buffer for pending outputs
     pub output_buffer: Arc<Mutex<PendingOutputBuffer>>,
+    /// Receiver for session not found signal from output forwarder
+    pub session_not_found_rx: mpsc::UnboundedReceiver<()>,
 }
 
 /// Run the main message forwarding loop
@@ -469,6 +486,9 @@ async fn run_message_loop(
     // Shared state for tracking git branch updates
     let current_branch = Arc::new(Mutex::new(config.git_branch.clone()));
 
+    // Channel for session not found signal from output forwarder
+    let (session_not_found_tx, session_not_found_rx) = mpsc::unbounded_channel::<()>();
+
     // Spawn output forwarder task with buffer
     let output_task = spawn_output_forwarder(
         output_rx,
@@ -477,6 +497,7 @@ async fn run_message_loop(
         config.working_directory.clone(),
         current_branch,
         session.output_buffer.clone(),
+        session_not_found_tx,
     );
 
     // Spawn WebSocket reader task
@@ -498,6 +519,7 @@ async fn run_message_loop(
         session_id,
         connection_start,
         output_buffer: session.output_buffer.clone(),
+        session_not_found_rx,
     };
 
     // Main loop
@@ -568,16 +590,10 @@ fn is_git_bash_command(output: &ClaudeOutput) -> bool {
         }
     }
     // Also check if an assistant message contains a Bash tool_use with git
-    if let ClaudeOutput::Assistant(asst) = output {
-        for block in &asst.message.content {
-            if let ContentBlock::ToolUse(tu) = block {
-                if tu.name == "Bash" {
-                    if let Some(cmd) = tu.input.get("command").and_then(|v| v.as_str()) {
-                        if cmd.contains("git ") {
-                            return true;
-                        }
-                    }
-                }
+    if let Some(bash) = output.as_tool_use("Bash") {
+        if let Some(claude_codes::tool_inputs::ToolInput::Bash(input)) = bash.typed_input() {
+            if input.command.contains("git ") {
+                return true;
             }
         }
     }
@@ -617,6 +633,7 @@ async fn check_and_send_branch_update(
 }
 
 /// Spawn the output forwarder task
+/// Returns a channel receiver that signals if "No conversation found" error is detected
 fn spawn_output_forwarder(
     mut output_rx: mpsc::UnboundedReceiver<ClaudeOutput>,
     ws_write: SharedWsWrite,
@@ -624,6 +641,7 @@ fn spawn_output_forwarder(
     working_directory: String,
     current_branch: Arc<Mutex<Option<String>>>,
     output_buffer: Arc<Mutex<PendingOutputBuffer>>,
+    session_not_found_tx: mpsc::UnboundedSender<()>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let mut message_count: u64 = 0;
@@ -669,6 +687,19 @@ fn spawn_output_forwarder(
             let content = serde_json::to_value(&output)
                 .unwrap_or(serde_json::Value::String(format!("{:?}", output)));
 
+            // Check for "No conversation found" error in result messages
+            if let ClaudeOutput::Result(res) = &output {
+                if res.is_error
+                    && res
+                        .errors
+                        .iter()
+                        .any(|e| e.contains("No conversation found"))
+                {
+                    warn!("Detected 'No conversation found' error in result message");
+                    let _ = session_not_found_tx.send(());
+                }
+            }
+
             // Add to buffer and get sequence number
             let seq = {
                 let mut buf = output_buffer.lock().await;
@@ -708,15 +739,15 @@ fn log_claude_output(output: &ClaudeOutput) {
     match output {
         ClaudeOutput::System(sys) => {
             debug!("← [system] subtype={}", sys.subtype);
-            if sys.subtype == "init" {
-                if let Some(model) = sys.data.get("model").and_then(|v| v.as_str()) {
+            if let Some(init) = sys.as_init() {
+                if let Some(ref model) = init.model {
                     debug!("  model: {}", model);
                 }
-                if let Some(cwd) = sys.data.get("cwd").and_then(|v| v.as_str()) {
+                if let Some(ref cwd) = init.cwd {
                     debug!("  cwd: {}", truncate(cwd, 60));
                 }
-                if let Some(tools) = sys.data.get("tools").and_then(|v| v.as_array()) {
-                    debug!("  tools: {} available", tools.len());
+                if !init.tools.is_empty() {
+                    debug!("  tools: {} available", init.tools.len());
                 }
             }
         }
@@ -738,7 +769,7 @@ fn log_claude_output(output: &ClaudeOutput) {
                     }
                     ContentBlock::ToolUse(tu) => {
                         tool_count += 1;
-                        let input_preview = format_tool_input(&tu.name, &tu.input);
+                        let input_preview = format_tool_input(tu);
                         debug!("← [assistant] tool_use: {} {}", tu.name, input_preview);
                     }
                     ContentBlock::Thinking(th) => {
@@ -817,7 +848,7 @@ fn log_claude_output(output: &ClaudeOutput) {
             debug!("← [control_request] id={}", req.request_id);
             match &req.request {
                 ControlRequestPayload::CanUseTool(tool_req) => {
-                    let input_preview = format_tool_input(&tool_req.tool_name, &tool_req.input);
+                    let input_preview = format_tool_input_json(&tool_req.input);
                     debug!("  tool: {} {}", tool_req.tool_name, input_preview);
                 }
                 ControlRequestPayload::HookCallback(_) => {
@@ -838,44 +869,44 @@ fn log_claude_output(output: &ClaudeOutput) {
 }
 
 /// Format tool input for logging
-fn format_tool_input(tool_name: &str, input: &serde_json::Value) -> String {
-    match tool_name {
-        "Bash" => input
-            .get("command")
-            .and_then(|v| v.as_str())
-            .map(|s| format!("$ {}", truncate(s, 70)))
-            .unwrap_or_default(),
-        "Read" | "Edit" | "Write" => input
-            .get("file_path")
-            .and_then(|v| v.as_str())
-            .map(|s| truncate(s, 70).to_string())
-            .unwrap_or_default(),
-        "Glob" | "Grep" => {
-            let pattern = input.get("pattern").and_then(|v| v.as_str()).unwrap_or("?");
-            let path = input.get("path").and_then(|v| v.as_str()).unwrap_or(".");
-            format!("'{}' in {}", truncate(pattern, 40), truncate(path, 30))
-        }
-        "Task" => input
-            .get("description")
-            .and_then(|v| v.as_str())
-            .map(|s| truncate(s, 60).to_string())
-            .unwrap_or_default(),
-        "WebFetch" | "WebSearch" => input
-            .get("url")
-            .or_else(|| input.get("query"))
-            .and_then(|v| v.as_str())
-            .map(|s| truncate(s, 60).to_string())
-            .unwrap_or_default(),
-        _ => {
-            // Generic: show first string field
-            if let Some(obj) = input.as_object() {
-                obj.iter()
-                    .find_map(|(k, v)| v.as_str().map(|s| format!("{}={}", k, truncate(s, 50))))
-                    .unwrap_or_default()
-            } else {
-                String::new()
-            }
-        }
+fn format_tool_input(tool: &ToolUseBlock) -> String {
+    format_tool_input_json(&tool.input)
+}
+
+fn format_tool_input_json(input: &serde_json::Value) -> String {
+    use claude_codes::tool_inputs::ToolInput;
+
+    // Try to parse as typed input first
+    if let Ok(typed) = serde_json::from_value::<ToolInput>(input.clone()) {
+        return match typed {
+            ToolInput::Bash(b) => format!("$ {}", truncate(&b.command, 70)),
+            ToolInput::Read(r) => truncate(&r.file_path, 70).to_string(),
+            ToolInput::Edit(e) => truncate(&e.file_path, 70).to_string(),
+            ToolInput::Write(w) => truncate(&w.file_path, 70).to_string(),
+            ToolInput::Glob(g) => format!(
+                "'{}' in {}",
+                truncate(&g.pattern, 40),
+                truncate(g.path.as_deref().unwrap_or("."), 30)
+            ),
+            ToolInput::Grep(g) => format!(
+                "'{}' in {}",
+                truncate(&g.pattern, 40),
+                truncate(g.path.as_deref().unwrap_or("."), 30)
+            ),
+            ToolInput::Task(t) => truncate(&t.description, 60).to_string(),
+            ToolInput::WebFetch(w) => truncate(&w.url, 60).to_string(),
+            ToolInput::WebSearch(w) => truncate(&w.query, 60).to_string(),
+            _ => String::new(),
+        };
+    }
+
+    // Fallback to manual JSON extraction for unknown tools
+    if let Some(obj) = input.as_object() {
+        obj.iter()
+            .find_map(|(k, v)| v.as_str().map(|s| format!("{}={}", k, truncate(s, 50))))
+            .unwrap_or_default()
+    } else {
+        String::new()
     }
 }
 
@@ -1072,6 +1103,11 @@ async fn run_main_loop(
                 return ConnectionResult::Disconnected(state.connection_start.elapsed());
             }
 
+            _ = state.session_not_found_rx.recv() => {
+                warn!("Session not found error detected from Claude output");
+                return ConnectionResult::SessionNotFound;
+            }
+
             Some(text) = input_rx.recv() => {
                 debug!("sending to claude process: {}", truncate(&text, 100));
                 let input = ClaudeInput::user_message(&text, state.session_id);
@@ -1098,9 +1134,15 @@ async fn run_main_loop(
                         )
                     } else {
                         // Allow with permissions for future similar operations
+                        // Convert typed permissions back to JSON for Claude protocol
+                        let perms_json: Vec<serde_json::Value> = perm_response
+                            .permissions
+                            .iter()
+                            .filter_map(|p| serde_json::to_value(p).ok())
+                            .collect();
                         ControlResponse::from_result(
                             &perm_response.request_id,
-                            PermissionResult::allow_with_permissions(input, perm_response.permissions)
+                            PermissionResult::allow_with_permissions(input, perms_json)
                         )
                     }
                 } else {

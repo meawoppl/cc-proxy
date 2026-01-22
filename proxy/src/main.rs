@@ -476,14 +476,25 @@ async fn run_proxy_session(mut config: SessionConfig) -> Result<()> {
         // Run the connection loop, but also watch for session not found signal
         let session_not_found = tokio::select! {
             result = session::run_connection_loop(&config, &mut claude_client, input_tx, &mut input_rx) => {
-                // Normal completion or error
-                info!("Proxy shutting down");
                 let _ = claude_client.shutdown().await;
-                return result;
+                match result {
+                    Ok(session::LoopResult::NormalExit) => {
+                        info!("Proxy shutting down");
+                        return Ok(());
+                    }
+                    Ok(session::LoopResult::SessionNotFound) => {
+                        // Session not found from JSON output - need to restart with fresh session
+                        warn!("Session not found (from JSON output), will start fresh session");
+                        SessionNotFound
+                    }
+                    Err(e) => {
+                        return Err(e);
+                    }
+                }
             }
             _ = session_not_found_rx.recv() => {
-                // Session not found - need to restart with fresh session
-                warn!("Local Claude session not found, will start fresh session");
+                // Session not found from stderr - need to restart with fresh session
+                warn!("Local Claude session not found (from stderr), will start fresh session");
                 let _ = claude_client.shutdown().await;
                 SessionNotFound
             }
