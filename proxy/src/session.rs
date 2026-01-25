@@ -427,7 +427,7 @@ async fn register_session(
     }
 }
 
-/// Permission response data
+/// Permission response data (from frontend to Claude)
 #[derive(Debug)]
 pub struct PermissionResponseData {
     pub request_id: String,
@@ -435,6 +435,15 @@ pub struct PermissionResponseData {
     pub input: Option<serde_json::Value>,
     pub permissions: Vec<claude_codes::io::PermissionSuggestion>,
     pub reason: Option<String>,
+}
+
+/// Permission request data (from library event to WebSocket forwarder)
+#[derive(Debug)]
+pub struct PermissionRequestData {
+    pub request_id: String,
+    pub tool_name: String,
+    pub input: serde_json::Value,
+    pub permission_suggestions: Vec<claude_codes::io::PermissionSuggestion>,
 }
 
 /// State for the main message loop, reducing parameter count
@@ -447,6 +456,8 @@ pub struct ConnectionState {
     pub ack_rx: mpsc::UnboundedReceiver<u64>,
     /// Sender for Claude outputs to the output forwarder
     pub output_tx: mpsc::UnboundedSender<ClaudeOutput>,
+    /// Sender for permission requests to the output forwarder
+    pub perm_request_tx: mpsc::UnboundedSender<PermissionRequestData>,
     /// Receiver to detect WebSocket disconnection
     pub disconnect_rx: tokio::sync::oneshot::Receiver<()>,
     /// When the connection was established
@@ -470,6 +481,9 @@ async fn run_message_loop(
     // Channel for Claude outputs
     let (output_tx, output_rx) = mpsc::unbounded_channel::<ClaudeOutput>();
 
+    // Channel for permission requests from library events
+    let (perm_request_tx, perm_request_rx) = mpsc::unbounded_channel::<PermissionRequestData>();
+
     // Channel for permission responses from frontend
     let (perm_tx, perm_rx) = mpsc::unbounded_channel::<PermissionResponseData>();
 
@@ -488,6 +502,7 @@ async fn run_message_loop(
     // Spawn output forwarder task with buffer
     let output_task = spawn_output_forwarder(
         output_rx,
+        perm_request_rx,
         ws_write.clone(),
         session_id,
         config.working_directory.clone(),
@@ -510,6 +525,7 @@ async fn run_message_loop(
         perm_rx,
         ack_rx,
         output_tx,
+        perm_request_tx,
         disconnect_rx,
         connection_start,
         output_buffer: session.output_buffer.clone(),
@@ -626,8 +642,13 @@ async fn check_and_send_branch_update(
 }
 
 /// Spawn the output forwarder task
+///
+/// Handles two channels:
+/// - `output_rx`: Regular Claude outputs (buffered with sequence numbers)
+/// - `perm_request_rx`: Permission requests from library events (sent immediately, not buffered)
 fn spawn_output_forwarder(
     mut output_rx: mpsc::UnboundedReceiver<ClaudeOutput>,
+    mut perm_request_rx: mpsc::UnboundedReceiver<PermissionRequestData>,
     ws_write: SharedWsWrite,
     session_id: Uuid,
     working_directory: String,
@@ -638,25 +659,15 @@ fn spawn_output_forwarder(
         let mut message_count: u64 = 0;
         let mut pending_git_check = false;
 
-        while let Some(output) = output_rx.recv().await {
-            message_count += 1;
-
-            // Log detailed info about the message
-            log_claude_output(&output);
-
-            // Check if this is a git-related bash command
-            if is_git_bash_command(&output) {
-                pending_git_check = true;
-            }
-
-            // Handle ControlRequest specially - these are NOT buffered (time-sensitive)
-            if let ClaudeOutput::ControlRequest(req) = &output {
-                if let ControlRequestPayload::CanUseTool(tool_req) = &req.request {
+        loop {
+            tokio::select! {
+                // Handle permission requests (time-sensitive, not buffered)
+                Some(perm_req) = perm_request_rx.recv() => {
                     let msg = ProxyMessage::PermissionRequest {
-                        request_id: req.request_id.clone(),
-                        tool_name: tool_req.tool_name.clone(),
-                        input: tool_req.input.clone(),
-                        permission_suggestions: tool_req.permission_suggestions.clone(),
+                        request_id: perm_req.request_id,
+                        tool_name: perm_req.tool_name,
+                        input: perm_req.input,
+                        permission_suggestions: perm_req.permission_suggestions,
                     };
                     if let Ok(json) = serde_json::to_string(&msg) {
                         let mut ws = ws_write.lock().await;
@@ -665,50 +676,62 @@ fn spawn_output_forwarder(
                             break;
                         }
                     }
-                    continue;
                 }
-            }
 
-            // Skip control responses (they're acks from Claude, not for backend)
-            if matches!(&output, ClaudeOutput::ControlResponse(_)) {
-                continue;
-            }
+                // Handle regular outputs (buffered with sequence numbers)
+                Some(output) = output_rx.recv() => {
+                    message_count += 1;
 
-            // For all other outputs, serialize and buffer with sequence number
-            let content = serde_json::to_value(&output)
-                .unwrap_or(serde_json::Value::String(format!("{:?}", output)));
+                    // Log detailed info about the message
+                    log_claude_output(&output);
 
-            // Add to buffer and get sequence number
-            let seq = {
-                let mut buf = output_buffer.lock().await;
-                buf.push(content.clone())
-            };
+                    // Check if this is a git-related bash command
+                    if is_git_bash_command(&output) {
+                        pending_git_check = true;
+                    }
 
-            // Send as sequenced output
-            let msg = ProxyMessage::SequencedOutput { seq, content };
+                    // Serialize and buffer with sequence number
+                    let content = serde_json::to_value(&output)
+                        .unwrap_or(serde_json::Value::String(format!("{:?}", output)));
 
-            if let Ok(json) = serde_json::to_string(&msg) {
-                let mut ws = ws_write.lock().await;
-                if let Err(e) = ws.send(Message::Text(json)).await {
-                    error!("Failed to send to backend: {}", e);
+                    // Add to buffer and get sequence number
+                    let seq = {
+                        let mut buf = output_buffer.lock().await;
+                        buf.push(content.clone())
+                    };
+
+                    // Send as sequenced output
+                    let msg = ProxyMessage::SequencedOutput { seq, content };
+
+                    if let Ok(json) = serde_json::to_string(&msg) {
+                        let mut ws = ws_write.lock().await;
+                        if let Err(e) = ws.send(Message::Text(json)).await {
+                            error!("Failed to send to backend: {}", e);
+                            break;
+                        }
+                    }
+
+                    // Check for branch update after git commands or every 100 messages
+                    let should_check_branch = pending_git_check || message_count.is_multiple_of(100);
+                    if should_check_branch {
+                        pending_git_check = false;
+                        check_and_send_branch_update(
+                            &ws_write,
+                            session_id,
+                            &working_directory,
+                            &current_branch,
+                        )
+                        .await;
+                    }
+                }
+
+                // Both channels closed
+                else => {
+                    debug!("Output forwarder ended - channels closed");
                     break;
                 }
             }
-
-            // Check for branch update after git commands or every 100 messages
-            let should_check_branch = pending_git_check || message_count.is_multiple_of(100);
-            if should_check_branch {
-                pending_git_check = false;
-                check_and_send_branch_update(
-                    &ws_write,
-                    session_id,
-                    &working_directory,
-                    &current_branch,
-                )
-                .await;
-            }
         }
-        debug!("Output forwarder ended");
     })
 }
 
@@ -1141,7 +1164,7 @@ async fn run_main_loop(
             }
 
             event = claude_session.next_event() => {
-                match handle_session_event(event, &state.output_tx, state.connection_start) {
+                match handle_session_event(event, &state.output_tx, &state.perm_request_tx, state.connection_start) {
                     Some(result) => return result,
                     None => continue,
                 }
@@ -1154,6 +1177,7 @@ async fn run_main_loop(
 fn handle_session_event(
     event: Option<SessionEvent>,
     output_tx: &mpsc::UnboundedSender<ClaudeOutput>,
+    perm_request_tx: &mpsc::UnboundedSender<PermissionRequestData>,
     connection_start: Instant,
 ) -> Option<ConnectionResult> {
     match event {
@@ -1168,9 +1192,23 @@ fn handle_session_event(
             }
             None
         }
-        Some(SessionEvent::PermissionRequest { .. }) => {
-            // Permission requests are handled by the output forwarder (via ControlRequest output)
-            // The library also emits this event, but we rely on the output path
+        Some(SessionEvent::PermissionRequest {
+            request_id,
+            tool_name,
+            input,
+            permission_suggestions,
+        }) => {
+            // Send permission request to the output forwarder for WebSocket delivery
+            let perm_data = PermissionRequestData {
+                request_id,
+                tool_name,
+                input,
+                permission_suggestions,
+            };
+            if perm_request_tx.send(perm_data).is_err() {
+                error!("Failed to forward permission request");
+                return Some(ConnectionResult::Disconnected(connection_start.elapsed()));
+            }
             None
         }
         Some(SessionEvent::SessionNotFound) => {

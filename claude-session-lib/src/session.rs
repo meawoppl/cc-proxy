@@ -14,14 +14,18 @@ use crate::snapshot::{PendingPermission, SessionConfig, SessionSnapshot};
 /// Events emitted by a session
 #[derive(Debug)]
 pub enum SessionEvent {
-    /// Claude produced output
+    /// Claude produced output (excluding permission requests, which have their own event)
     Output(ClaudeOutput),
 
     /// Claude is requesting permission for a tool
+    ///
+    /// This is the canonical event for permission requests. Permission requests
+    /// are NOT emitted as `Output(ControlRequest(...))` - only this event is used.
     PermissionRequest {
         request_id: String,
         tool_name: String,
         input: serde_json::Value,
+        permission_suggestions: Vec<claude_codes::io::PermissionSuggestion>,
     },
 
     /// Session not found locally (e.g., when resuming an expired session)
@@ -171,8 +175,11 @@ impl Session {
     /// Returns `None` if the session has exited and no more events are available.
     /// Use this in a loop with other async operations via `tokio::select!`.
     pub async fn next_event(&mut self) -> Option<SessionEvent> {
-        // Poll Claude for output
-        if let Some(ref mut client) = self.client {
+        // Loop to skip internal messages (ControlResponse)
+        loop {
+            // Poll Claude for output
+            let client = self.client.as_mut()?;
+
             match client.receive().await {
                 Ok(output) => {
                     // Buffer the output
@@ -193,7 +200,7 @@ impl Session {
                         }
                     }
 
-                    // Check for permission requests
+                    // Check for permission requests - emit as PermissionRequest, not Output
                     if let ClaudeOutput::ControlRequest(ref req) = output {
                         if let claude_codes::io::ControlRequestPayload::CanUseTool(ref tool_req) =
                             req.request
@@ -209,12 +216,20 @@ impl Session {
                                 request_id: request_id.clone(),
                             };
 
+                            // Emit PermissionRequest (not Output) for permission requests
                             return Some(SessionEvent::PermissionRequest {
                                 request_id,
                                 tool_name: tool_req.tool_name.clone(),
                                 input: tool_req.input.clone(),
+                                permission_suggestions: tool_req.permission_suggestions.clone(),
                             });
                         }
+                    }
+
+                    // Skip ControlResponse (acks from Claude, not useful to callers)
+                    if matches!(output, ClaudeOutput::ControlResponse(_)) {
+                        // Continue loop to get next event
+                        continue;
                     }
 
                     return Some(SessionEvent::Output(output));
@@ -231,8 +246,6 @@ impl Session {
                 }
             }
         }
-
-        None
     }
 
     /// Send user input to Claude
