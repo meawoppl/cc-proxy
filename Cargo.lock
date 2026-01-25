@@ -637,6 +637,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "claude-session-lib"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "claude-codes",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "cli-tools"
 version = "1.0.0"
 dependencies = [
