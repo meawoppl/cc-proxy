@@ -11,9 +11,9 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use claude_session_lib::{Session as LibSession, SessionConfig as LibSessionConfig};
+use claude_session_lib::{Session as ClaudeSession, SessionConfig};
 use config::{ProxyConfig, SessionAuth};
-use session::SessionConfig;
+use session::ProxySessionConfig;
 use tracing::{info, warn};
 use uuid::Uuid;
 
@@ -318,13 +318,13 @@ async fn main() -> Result<()> {
     }
 
     // Build session config
-    let session_config = SessionConfig {
+    let session_config = ProxySessionConfig {
         backend_url,
         session_id,
         session_name,
         auth_token,
         working_directory: cwd,
-        resuming,
+        resume: resuming,
         git_branch,
     };
 
@@ -435,11 +435,8 @@ async fn resolve_auth_token(
     Ok(Some(token))
 }
 
-/// Result indicating session not found
-struct SessionNotFound;
-
 /// Start Claude and run the proxy session
-async fn run_proxy_session(mut config: SessionConfig) -> Result<()> {
+async fn run_proxy_session(mut config: ProxySessionConfig) -> Result<()> {
     loop {
         ui::print_status("Starting Claude CLI...");
 
@@ -457,26 +454,21 @@ async fn run_proxy_session(mut config: SessionConfig) -> Result<()> {
 
         let _ = claude_session.stop().await;
 
-        let session_not_found = match result {
+        match result {
             Ok(session::LoopResult::NormalExit) => {
                 info!("Proxy shutting down");
                 return Ok(());
             }
             Ok(session::LoopResult::SessionNotFound) => {
-                // Session not found from JSON output - need to restart with fresh session
                 warn!("Session not found (from JSON output), will start fresh session");
-                SessionNotFound
+                // Only retry if we were trying to resume
+                if !config.resume {
+                    return Ok(());
+                }
             }
             Err(e) => {
                 return Err(e);
             }
-        };
-
-        // Only handle session not found if we were trying to resume
-        let SessionNotFound = session_not_found;
-        if !config.resuming {
-            // Not resuming - just exit (shouldn't happen, but handle gracefully)
-            return Ok(());
         }
 
         // Create a new session and update config
@@ -498,7 +490,7 @@ async fn run_proxy_session(mut config: SessionConfig) -> Result<()> {
 
         // Update the session config for retry
         config.session_id = new_session_id;
-        config.resuming = false;
+        config.resume = false;
 
         info!("Retrying with new session ID: {}", new_session_id);
         // Loop will continue and start fresh session
@@ -506,16 +498,16 @@ async fn run_proxy_session(mut config: SessionConfig) -> Result<()> {
 }
 
 /// Create a Claude session using claude-session-lib
-async fn create_claude_session(config: &SessionConfig) -> Result<LibSession> {
-    let lib_config = LibSessionConfig {
+async fn create_claude_session(config: &ProxySessionConfig) -> Result<ClaudeSession> {
+    let claude_config = SessionConfig {
         session_id: config.session_id,
         working_directory: PathBuf::from(&config.working_directory),
         session_name: config.session_name.clone(),
-        resume: config.resuming,
+        resume: config.resume,
         claude_path: None,
     };
 
-    if config.resuming {
+    if config.resume {
         info!(
             "Using --resume {} to resume Claude session",
             config.session_id
@@ -527,7 +519,7 @@ async fn create_claude_session(config: &SessionConfig) -> Result<LibSession> {
         );
     }
 
-    LibSession::new(lib_config)
+    ClaudeSession::new(claude_config)
         .await
         .map_err(|e| anyhow::anyhow!("Failed to create Claude session: {}", e))
 }
