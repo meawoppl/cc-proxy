@@ -220,3 +220,83 @@
     color: var(--text-primary);
 }
 
+/* ==========================================================================
+   Anthropic API Error Message
+   ========================================================================== */
+
+.anthropic-error-message {
+    background: rgba(247, 118, 142, 0.08);
+    border: 1px solid rgba(247, 118, 142, 0.3);
+}
+
+.anthropic-error-message .message-header {
+    background: rgba(247, 118, 142, 0.15);
+    border-bottom-color: rgba(247, 118, 142, 0.3);
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+.message-type-badge.anthropic-error {
+    background: rgba(247, 118, 142, 0.25);
+    color: var(--error);
+}
+
+.anthropic-error-message .http-status {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+    padding: 0.15rem 0.5rem;
+    background: rgba(0, 0, 0, 0.2);
+    border-radius: 4px;
+}
+
+.anthropic-error-content {
+    display: flex;
+    align-items: flex-start;
+    gap: 1rem;
+}
+
+.anthropic-error-content .error-icon {
+    font-size: 2rem;
+    line-height: 1;
+    color: var(--error);
+    flex-shrink: 0;
+}
+
+.anthropic-error-content .error-details {
+    flex: 1;
+}
+
+.anthropic-error-content .error-type-display {
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: var(--error);
+    margin-bottom: 0.25rem;
+}
+
+.anthropic-error-content .error-message-text {
+    color: var(--text-primary);
+    font-size: 0.95rem;
+    line-height: 1.5;
+}
+
+.anthropic-error-message .error-request-id {
+    margin-top: 0.75rem;
+    padding-top: 0.75rem;
+    border-top: 1px solid rgba(247, 118, 142, 0.2);
+    font-size: 0.8rem;
+}
+
+.anthropic-error-message .request-id-label {
+    color: var(--text-secondary);
+}
+
+.anthropic-error-message .request-id-value {
+    font-family: var(--font-mono);
+    color: var(--text-muted);
+    font-size: 0.75rem;
+    background: rgba(0, 0, 0, 0.2);
+    padding: 0.15rem 0.4rem;
+    border-radius: 3px;
+}

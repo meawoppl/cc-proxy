@@ -418,7 +418,8 @@ impl Session {
             .arg("--input-format")
             .arg("stream-json")
             .arg("--permission-prompt-tool")
-            .arg("stdio");
+            .arg("stdio")
+            .arg("--replay-user-messages");
 
         if config.resume {
             cmd.arg("--resume").arg(config.session_id.to_string());
@@ -445,6 +446,7 @@ impl Session {
                     "stream-json",
                     "--permission-prompt-tool",
                     "stdio",
+                    "--replay-user-messages",
                 ]
                 .iter()
                 .map(|s| s.to_string()),
