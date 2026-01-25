@@ -5,7 +5,6 @@ use claude_codes::io::{ControlResponse, PermissionResult};
 use claude_codes::{AsyncClient, ClaudeInput, ClaudeOutput};
 use std::path::Path;
 use tokio::process::Command;
-use tokio::sync::mpsc;
 use uuid::Uuid;
 
 use crate::buffer::OutputBuffer;
@@ -30,9 +29,6 @@ pub enum SessionEvent {
 
     /// Session encountered an error
     Error(SessionError),
-
-    /// Git branch changed (detected from tool usage)
-    BranchChanged { branch: Option<String> },
 }
 
 /// Response to a permission request
@@ -42,8 +38,6 @@ pub struct PermissionResponse {
     pub allow: bool,
     /// Optional modified input (for edit suggestions)
     pub input: Option<serde_json::Value>,
-    /// Whether to remember this decision
-    pub remember: bool,
 }
 
 impl PermissionResponse {
@@ -51,7 +45,15 @@ impl PermissionResponse {
     pub fn allow() -> Self {
         Self {
             allow: true,
-            ..Default::default()
+            input: None,
+        }
+    }
+
+    /// Create an allow response with modified input
+    pub fn allow_with_input(input: serde_json::Value) -> Self {
+        Self {
+            allow: true,
+            input: Some(input),
         }
     }
 
@@ -81,18 +83,12 @@ pub struct Session {
     buffer: OutputBuffer,
     state: SessionState,
     pending_permission: Option<PendingPermission>,
-    #[allow(dead_code)]
-    event_rx: mpsc::UnboundedReceiver<SessionEvent>,
-    #[allow(dead_code)]
-    event_tx: mpsc::UnboundedSender<SessionEvent>,
 }
 
 impl Session {
     /// Create a new session (spawns Claude process)
     pub async fn new(config: SessionConfig) -> Result<Self, SessionError> {
-        let (event_tx, event_rx) = mpsc::unbounded_channel();
         let buffer = OutputBuffer::new(config.session_id);
-
         let client = Self::spawn_claude(&config).await?;
 
         Ok(Self {
@@ -102,8 +98,6 @@ impl Session {
             buffer,
             state: SessionState::Running,
             pending_permission: None,
-            event_rx,
-            event_tx,
         })
     }
 
@@ -112,7 +106,6 @@ impl Session {
     /// This restores the buffer and pending permission state,
     /// then spawns a new Claude process with --resume.
     pub async fn restore(snapshot: SessionSnapshot) -> Result<Self, SessionError> {
-        let (event_tx, event_rx) = mpsc::unbounded_channel();
         let buffer = OutputBuffer::from_snapshot(snapshot.id, snapshot.pending_outputs);
 
         // Always resume when restoring
@@ -138,8 +131,6 @@ impl Session {
             buffer,
             state,
             pending_permission: snapshot.pending_permission,
-            event_rx,
-            event_tx,
         })
     }
 
@@ -170,15 +161,10 @@ impl Session {
 
     /// Poll for the next event
     ///
-    /// Returns `None` if no events are currently available.
+    /// Returns `None` if the session has exited and no more events are available.
     /// Use this in a loop with other async operations via `tokio::select!`.
     pub async fn next_event(&mut self) -> Option<SessionEvent> {
-        // First check for buffered events
-        if let Ok(event) = self.event_rx.try_recv() {
-            return Some(event);
-        }
-
-        // Then poll Claude for output
+        // Poll Claude for output
         if let Some(ref mut client) = self.client {
             match client.receive().await {
                 Ok(output) => {
@@ -229,30 +215,21 @@ impl Session {
     }
 
     /// Send user input to Claude
+    ///
+    /// The content can be a JSON string value for plain text,
+    /// or a more complex JSON structure if needed.
     pub async fn send_input(&mut self, content: serde_json::Value) -> Result<(), SessionError> {
         if let SessionState::Exited { code } = self.state {
             return Err(SessionError::AlreadyExited(code));
         }
 
         if let Some(ref mut client) = self.client {
-            let input = ClaudeInput::user_message(content.to_string(), self.id);
-            client
-                .send(&input)
-                .await
-                .map_err(SessionError::ClaudeError)?;
-        }
-
-        Ok(())
-    }
-
-    /// Send raw text input to Claude
-    pub async fn send_text(&mut self, text: &str) -> Result<(), SessionError> {
-        if let SessionState::Exited { code } = self.state {
-            return Err(SessionError::AlreadyExited(code));
-        }
-
-        if let Some(ref mut client) = self.client {
-            let input = ClaudeInput::user_message(text.to_string(), self.id);
+            // Extract string content or serialize to string
+            let text = match &content {
+                serde_json::Value::String(s) => s.clone(),
+                other => other.to_string(),
+            };
+            let input = ClaudeInput::user_message(text, self.id);
             client
                 .send(&input)
                 .await

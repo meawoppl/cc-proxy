@@ -62,9 +62,6 @@ while let Some(event) = session.next_event().await {
         SessionEvent::Error(e) => {
             eprintln!("Error: {}", e);
         }
-        SessionEvent::BranchChanged { branch } => {
-            // Git branch changed
-        }
     }
 }
 ```
@@ -105,7 +102,6 @@ pub enum SessionEvent {
     PermissionRequest { request_id: String, tool_name: String, input: serde_json::Value },
     Exited { code: i32 },
     Error(SessionError),
-    BranchChanged { branch: Option<String> },
 }
 ```
 
@@ -115,11 +111,11 @@ pub enum SessionEvent {
 pub struct PermissionResponse {
     pub allow: bool,
     pub input: Option<serde_json::Value>,
-    pub remember: bool,
 }
 
 impl PermissionResponse {
     pub fn allow() -> Self;
+    pub fn allow_with_input(input: serde_json::Value) -> Self;
     pub fn deny() -> Self;
 }
 ```
@@ -232,4 +228,4 @@ The proxy is a full application with WebSocket protocol handling, authentication
 
 2. **Buffer size limits** - Max buffer size is 1000 outputs. Should this be configurable?
 
-3. **Git branch detection** - Currently included in `SessionEvent::BranchChanged`. Could be extracted to service if unwanted.
+3. **Git branch detection** - Not currently implemented. Services can detect branch changes by watching for Bash tool results containing git commands.
