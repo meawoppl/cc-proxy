@@ -69,5 +69,5 @@ pub use session::{PermissionResponse, Session, SessionEvent};
 pub use snapshot::{PendingPermission, SessionConfig, SessionSnapshot};
 
 // Re-export claude_codes types that appear in our public API
-pub use claude_codes::io::{ControlResponse, PermissionResult, PermissionSuggestion};
-pub use claude_codes::ClaudeOutput;
+pub use claude_codes::io::PermissionSuggestion;
+pub use claude_codes::{ClaudeOutput, Permission};

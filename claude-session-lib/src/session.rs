@@ -49,6 +49,10 @@ pub struct PermissionResponse {
     pub allow: bool,
     /// Optional modified input (for edit suggestions)
     pub input: Option<serde_json::Value>,
+    /// Permissions to grant for future similar operations ("remember this decision")
+    pub permissions: Vec<claude_codes::Permission>,
+    /// Reason for denial (if allow is false)
+    pub reason: Option<String>,
 }
 
 impl PermissionResponse {
@@ -57,6 +61,8 @@ impl PermissionResponse {
         Self {
             allow: true,
             input: None,
+            permissions: vec![],
+            reason: None,
         }
     }
 
@@ -65,12 +71,47 @@ impl PermissionResponse {
         Self {
             allow: true,
             input: Some(input),
+            permissions: vec![],
+            reason: None,
+        }
+    }
+
+    /// Create an allow response with permissions to remember
+    pub fn allow_and_remember(permissions: Vec<claude_codes::Permission>) -> Self {
+        Self {
+            allow: true,
+            input: None,
+            permissions,
+            reason: None,
+        }
+    }
+
+    /// Create an allow response with input and permissions to remember
+    pub fn allow_with_input_and_remember(
+        input: serde_json::Value,
+        permissions: Vec<claude_codes::Permission>,
+    ) -> Self {
+        Self {
+            allow: true,
+            input: Some(input),
+            permissions,
+            reason: None,
         }
     }
 
     /// Create a deny response
     pub fn deny() -> Self {
         Self::default()
+    }
+
+    /// Create a deny response with a reason
+    pub fn deny_with_reason(reason: impl Into<String>) -> Self {
+        Self {
+            allow: false,
+            input: None,
+            permissions: vec![],
+            reason: Some(reason.into()),
+        }
     }
 }
 
@@ -274,6 +315,8 @@ impl Session {
     }
 
     /// Respond to a permission request
+    ///
+    /// Supports simple allow/deny as well as "remember this decision" with permissions.
     pub async fn respond_permission(
         &mut self,
         request_id: &str,
@@ -290,49 +333,30 @@ impl Session {
         }
 
         if let Some(ref mut client) = self.client {
-            let input_value = response.input.unwrap_or(serde_json::Value::Null);
+            let input_value = response
+                .input
+                .unwrap_or(serde_json::Value::Object(Default::default()));
+
             let ctrl_response = if response.allow {
-                ControlResponse::from_result(request_id, PermissionResult::allow(input_value))
+                if response.permissions.is_empty() {
+                    // Simple allow
+                    ControlResponse::from_result(request_id, PermissionResult::allow(input_value))
+                } else {
+                    // Allow with permissions to remember
+                    ControlResponse::from_result(
+                        request_id,
+                        PermissionResult::allow_with_typed_permissions(
+                            input_value,
+                            response.permissions,
+                        ),
+                    )
+                }
             } else {
-                ControlResponse::from_result(
-                    request_id,
-                    PermissionResult::deny("User denied".to_string()),
-                )
+                // Deny with optional reason
+                let reason = response.reason.unwrap_or_else(|| "User denied".to_string());
+                ControlResponse::from_result(request_id, PermissionResult::deny(reason))
             };
 
-            client
-                .send_control_response(ctrl_response)
-                .await
-                .map_err(SessionError::ClaudeError)?;
-        }
-
-        self.pending_permission = None;
-        self.state = SessionState::Running;
-
-        Ok(())
-    }
-
-    /// Send a raw control response to Claude
-    ///
-    /// This is an advanced method for cases where the simple `respond_permission`
-    /// doesn't provide enough control (e.g., sending permissions to remember).
-    /// The caller is responsible for ensuring the request_id matches a pending request.
-    pub async fn send_raw_control_response(
-        &mut self,
-        request_id: &str,
-        ctrl_response: ControlResponse,
-    ) -> Result<(), SessionError> {
-        // Verify this is the pending request
-        match &self.pending_permission {
-            Some(perm) if perm.request_id == request_id => {}
-            _ => {
-                return Err(SessionError::InvalidPermissionResponse(
-                    request_id.to_string(),
-                ));
-            }
-        }
-
-        if let Some(ref mut client) = self.client {
             client
                 .send_control_response(ctrl_response)
                 .await
