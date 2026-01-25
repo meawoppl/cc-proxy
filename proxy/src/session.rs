@@ -453,8 +453,6 @@ pub struct ConnectionState {
     pub connection_start: Instant,
     /// Buffer for pending outputs
     pub output_buffer: Arc<Mutex<PendingOutputBuffer>>,
-    /// Receiver for session not found signal from output forwarder
-    pub session_not_found_rx: mpsc::UnboundedReceiver<()>,
 }
 
 /// Run the main message forwarding loop
@@ -487,9 +485,6 @@ async fn run_message_loop(
     // Shared state for tracking git branch updates
     let current_branch = Arc::new(Mutex::new(config.git_branch.clone()));
 
-    // Channel for session not found signal from output forwarder
-    let (session_not_found_tx, session_not_found_rx) = mpsc::unbounded_channel::<()>();
-
     // Spawn output forwarder task with buffer
     let output_task = spawn_output_forwarder(
         output_rx,
@@ -498,7 +493,6 @@ async fn run_message_loop(
         config.working_directory.clone(),
         current_branch,
         session.output_buffer.clone(),
-        session_not_found_tx,
     );
 
     // Spawn WebSocket reader task
@@ -519,7 +513,6 @@ async fn run_message_loop(
         disconnect_rx,
         connection_start,
         output_buffer: session.output_buffer.clone(),
-        session_not_found_rx,
     };
 
     // Main loop
@@ -633,7 +626,6 @@ async fn check_and_send_branch_update(
 }
 
 /// Spawn the output forwarder task
-/// Returns a channel receiver that signals if "No conversation found" error is detected
 fn spawn_output_forwarder(
     mut output_rx: mpsc::UnboundedReceiver<ClaudeOutput>,
     ws_write: SharedWsWrite,
@@ -641,7 +633,6 @@ fn spawn_output_forwarder(
     working_directory: String,
     current_branch: Arc<Mutex<Option<String>>>,
     output_buffer: Arc<Mutex<PendingOutputBuffer>>,
-    session_not_found_tx: mpsc::UnboundedSender<()>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let mut message_count: u64 = 0;
@@ -686,19 +677,6 @@ fn spawn_output_forwarder(
             // For all other outputs, serialize and buffer with sequence number
             let content = serde_json::to_value(&output)
                 .unwrap_or(serde_json::Value::String(format!("{:?}", output)));
-
-            // Check for "No conversation found" error in result messages
-            if let ClaudeOutput::Result(res) = &output {
-                if res.is_error
-                    && res
-                        .errors
-                        .iter()
-                        .any(|e| e.contains("No conversation found"))
-                {
-                    warn!("Detected 'No conversation found' error in result message");
-                    let _ = session_not_found_tx.send(());
-                }
-            }
 
             // Add to buffer and get sequence number
             let seq = {
@@ -1103,11 +1081,6 @@ async fn run_main_loop(
                 return ConnectionResult::Disconnected(state.connection_start.elapsed());
             }
 
-            _ = state.session_not_found_rx.recv() => {
-                warn!("Session not found error detected from Claude output");
-                return ConnectionResult::SessionNotFound;
-            }
-
             Some(text) = input_rx.recv() => {
                 debug!("sending to claude process: {}", truncate(&text, 100));
 
@@ -1199,6 +1172,10 @@ fn handle_session_event(
             // Permission requests are handled by the output forwarder (via ControlRequest output)
             // The library also emits this event, but we rely on the output path
             None
+        }
+        Some(SessionEvent::SessionNotFound) => {
+            warn!("Session not found (from library event)");
+            Some(ConnectionResult::SessionNotFound)
         }
         Some(SessionEvent::Exited { code }) => {
             info!("Claude session exited with code {}", code);

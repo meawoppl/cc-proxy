@@ -24,6 +24,13 @@ pub enum SessionEvent {
         input: serde_json::Value,
     },
 
+    /// Session not found locally (e.g., when resuming an expired session)
+    ///
+    /// This is emitted when Claude reports "No conversation found" error,
+    /// indicating the session ID doesn't exist locally. The caller should
+    /// typically start a fresh session with a new ID.
+    SessionNotFound,
+
     /// Claude process exited
     Exited { code: i32 },
 
@@ -171,6 +178,20 @@ impl Session {
                     // Buffer the output
                     let output_value = serde_json::to_value(&output).unwrap_or_default();
                     self.buffer.push(output_value);
+
+                    // Check for "No conversation found" error (session not found locally)
+                    if let ClaudeOutput::Result(ref res) = output {
+                        if res.is_error
+                            && res
+                                .errors
+                                .iter()
+                                .any(|e| e.contains("No conversation found"))
+                        {
+                            self.state = SessionState::Exited { code: 1 };
+                            self.client = None;
+                            return Some(SessionEvent::SessionNotFound);
+                        }
+                    }
 
                     // Check for permission requests
                     if let ClaudeOutput::ControlRequest(ref req) = output {
