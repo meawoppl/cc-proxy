@@ -1536,6 +1536,25 @@ fn render_result_message(msg: &ResultMessage) -> Html {
         duration_ms, api_ms, turns
     );
 
+    // Check if this is an Anthropic API error and render it specially
+    if is_error {
+        if let Some(error_html) = try_render_api_error(msg.result.as_deref()) {
+            return html! {
+                <>
+                    { error_html }
+                    <div class={classes!("claude-message", "result-message", status_class)}>
+                        <div class="result-stats-bar">
+                            <span class={classes!("result-status", status_class)}>{ "✗" }</span>
+                            <span class="stat-item duration" title={timing_tooltip.clone()}>
+                                { format_duration(duration_ms) }
+                            </span>
+                        </div>
+                    </div>
+                </>
+            };
+        }
+    }
+
     // Result message is just a compact stats bar (cost shown in session header instead)
     html! {
         <div class={classes!("claude-message", "result-message", status_class)}>
@@ -1575,6 +1594,112 @@ fn render_result_message(msg: &ResultMessage) -> Html {
                 }
             </div>
         </div>
+    }
+}
+
+/// Anthropic API error structure embedded in result text
+#[derive(Debug, Deserialize)]
+struct AnthropicApiError {
+    #[serde(rename = "type")]
+    error_type: Option<String>,
+    error: Option<AnthropicErrorDetails>,
+    request_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AnthropicErrorDetails {
+    #[serde(rename = "type")]
+    error_type: Option<String>,
+    message: Option<String>,
+}
+
+/// Try to parse and render an Anthropic API error from the result text
+/// Returns None if the text doesn't look like an API error
+fn try_render_api_error(result_text: Option<&str>) -> Option<Html> {
+    let text = result_text?;
+
+    // Look for patterns like "API Error: 500 {...json...}" or just the JSON
+    let json_start = text.find('{')?;
+    let json_str = &text[json_start..];
+
+    // Try to parse as Anthropic API error
+    let api_error: AnthropicApiError = serde_json::from_str(json_str).ok()?;
+
+    // Only render if it looks like an Anthropic error
+    if api_error.error_type.as_deref() != Some("error") {
+        return None;
+    }
+
+    let error_details = api_error.error.as_ref();
+    let error_type = error_details
+        .and_then(|e| e.error_type.as_deref())
+        .unwrap_or("unknown_error");
+    let error_message = error_details
+        .and_then(|e| e.message.as_deref())
+        .unwrap_or("An error occurred");
+    let request_id = api_error.request_id.as_deref();
+
+    // Extract HTTP status if present in the prefix (e.g., "API Error: 500")
+    let http_status = if text.starts_with("API Error:") {
+        text.split_whitespace()
+            .nth(2)
+            .and_then(|s| s.parse::<u16>().ok())
+    } else {
+        None
+    };
+
+    // Format a human-readable error type
+    let display_type = format_error_type(error_type);
+
+    Some(html! {
+        <div class="claude-message anthropic-error-message">
+            <div class="message-header">
+                <span class="message-type-badge anthropic-error">{ "Anthropic API Error" }</span>
+                {
+                    if let Some(status) = http_status {
+                        html! { <span class="http-status">{ format!("HTTP {}", status) }</span> }
+                    } else {
+                        html! {}
+                    }
+                }
+            </div>
+            <div class="message-body">
+                <div class="anthropic-error-content">
+                    <div class="error-icon">{ "⚠" }</div>
+                    <div class="error-details">
+                        <div class="error-type-display">{ display_type }</div>
+                        <div class="error-message-text">{ error_message }</div>
+                    </div>
+                </div>
+                {
+                    if let Some(req_id) = request_id {
+                        html! {
+                            <div class="error-request-id">
+                                <span class="request-id-label">{ "Request ID: " }</span>
+                                <code class="request-id-value">{ req_id }</code>
+                            </div>
+                        }
+                    } else {
+                        html! {}
+                    }
+                }
+            </div>
+        </div>
+    })
+}
+
+/// Convert Anthropic error types to human-readable format
+fn format_error_type(error_type: &str) -> String {
+    match error_type {
+        "api_error" => "Internal Server Error".to_string(),
+        "authentication_error" => "Authentication Failed".to_string(),
+        "invalid_request_error" => "Invalid Request".to_string(),
+        "not_found_error" => "Not Found".to_string(),
+        "overloaded_error" => "API Overloaded".to_string(),
+        "permission_error" => "Permission Denied".to_string(),
+        "rate_limit_error" => "Rate Limited".to_string(),
+        "request_too_large" => "Request Too Large".to_string(),
+        other => other.replace('_', " ").to_string(),
     }
 }
 
