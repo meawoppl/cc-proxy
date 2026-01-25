@@ -1065,8 +1065,7 @@ async fn run_main_loop(
     input_rx: &mut mpsc::UnboundedReceiver<String>,
     state: &mut ConnectionState,
 ) -> ConnectionResult {
-    use claude_codes::Permission;
-    use claude_session_lib::{ControlResponse, PermissionResult};
+    use claude_session_lib::{Permission, PermissionResponse as LibPermissionResponse};
 
     loop {
         tokio::select! {
@@ -1087,38 +1086,26 @@ async fn run_main_loop(
             Some(perm_response) = state.perm_rx.recv() => {
                 debug!("sending permission response to claude: {:?}", perm_response);
 
-                // Create the control response
-                let ctrl_response = if perm_response.allow {
-                    // Use the original input from the permission response
+                // Build the library's PermissionResponse
+                let lib_response = if perm_response.allow {
                     let input = perm_response.input.unwrap_or(serde_json::Value::Object(Default::default()));
+                    let permissions: Vec<Permission> = perm_response
+                        .permissions
+                        .iter()
+                        .map(Permission::from_suggestion)
+                        .collect();
 
-                    if perm_response.permissions.is_empty() {
-                        // Simple allow without remembering
-                        ControlResponse::from_result(
-                            &perm_response.request_id,
-                            PermissionResult::allow(input)
-                        )
+                    if permissions.is_empty() {
+                        LibPermissionResponse::allow_with_input(input)
                     } else {
-                        // Allow with permissions for future similar operations
-                        // Use typed Permission API for clean conversion
-                        let permissions: Vec<Permission> = perm_response
-                            .permissions
-                            .iter()
-                            .map(Permission::from_suggestion)
-                            .collect();
-                        ControlResponse::from_result(
-                            &perm_response.request_id,
-                            PermissionResult::allow_with_typed_permissions(input, permissions)
-                        )
+                        LibPermissionResponse::allow_with_input_and_remember(input, permissions)
                     }
                 } else {
-                    ControlResponse::from_result(
-                        &perm_response.request_id,
-                        PermissionResult::deny(perm_response.reason.unwrap_or_else(|| "User denied".to_string()))
-                    )
+                    let reason = perm_response.reason.unwrap_or_else(|| "User denied".to_string());
+                    LibPermissionResponse::deny_with_reason(reason)
                 };
 
-                if let Err(e) = claude_session.send_raw_control_response(&perm_response.request_id, ctrl_response).await {
+                if let Err(e) = claude_session.respond_permission(&perm_response.request_id, lib_response).await {
                     error!("Failed to send permission response to Claude: {}", e);
                     return ConnectionResult::ClaudeExited;
                 }
