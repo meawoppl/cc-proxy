@@ -149,16 +149,12 @@ pub enum LoopResult {
 }
 
 /// State that persists across WebSocket reconnections for a session.
-/// This includes the input channel, output buffer, and session config.
+/// This includes the output buffer, session config, and backoff state.
 pub struct SessionState<'a> {
     /// Session configuration
     pub config: &'a ProxySessionConfig,
     /// Claude session from claude-session-lib
     pub claude_session: &'a mut ClaudeSession,
-    /// Sender for input messages (cloned per connection)
-    pub input_tx: mpsc::UnboundedSender<String>,
-    /// Receiver for input messages (persists across connections)
-    pub input_rx: &'a mut mpsc::UnboundedReceiver<String>,
     /// Output buffer with persistence
     pub output_buffer: Arc<Mutex<PendingOutputBuffer>>,
     /// Backoff state for reconnection
@@ -172,8 +168,6 @@ impl<'a> SessionState<'a> {
     pub fn new(
         config: &'a ProxySessionConfig,
         claude_session: &'a mut ClaudeSession,
-        input_tx: mpsc::UnboundedSender<String>,
-        input_rx: &'a mut mpsc::UnboundedReceiver<String>,
     ) -> Result<Self> {
         let output_buffer = match PendingOutputBuffer::new(config.session_id) {
             Ok(buf) => buf,
@@ -190,8 +184,6 @@ impl<'a> SessionState<'a> {
         Ok(Self {
             config,
             claude_session,
-            input_tx,
-            input_rx,
             output_buffer,
             backoff: Backoff::new(),
             first_connection: true,
@@ -227,10 +219,8 @@ impl<'a> SessionState<'a> {
 pub async fn run_connection_loop(
     config: &ProxySessionConfig,
     claude_session: &mut ClaudeSession,
-    input_tx: mpsc::UnboundedSender<String>,
-    input_rx: &mut mpsc::UnboundedReceiver<String>,
 ) -> Result<LoopResult> {
-    let mut session = SessionState::new(config, claude_session, input_tx, input_rx)?;
+    let mut session = SessionState::new(config, claude_session)?;
     session.log_pending_messages().await;
 
     loop {
@@ -439,6 +429,21 @@ pub struct PermissionResponseData {
     pub reason: Option<String>,
 }
 
+/// Events from WebSocket reader to main loop
+#[derive(Debug)]
+pub enum WsEvent {
+    /// User input text (to send to Claude)
+    Input(String),
+    /// Wiggum mode activation with original prompt
+    WiggumActivation(String),
+    /// Permission response from frontend
+    PermissionResponse(PermissionResponseData),
+    /// Output acknowledgment from backend
+    OutputAck(u64),
+    /// Server requested graceful shutdown
+    ServerShutdown { reconnect_delay_ms: u64 },
+}
+
 /// Maximum iterations for wiggum mode before auto-stopping
 const WIGGUM_MAX_ITERATIONS: u32 = 50;
 
@@ -455,10 +460,8 @@ pub struct WiggumState {
 /// Contains channels and state that are specific to a single connection attempt.
 /// Note: input_rx is passed separately as it persists across reconnections.
 pub struct ConnectionState {
-    /// Receiver for permission responses from frontend
-    pub perm_rx: mpsc::UnboundedReceiver<PermissionResponseData>,
-    /// Receiver for output acknowledgments from backend
-    pub ack_rx: mpsc::UnboundedReceiver<u64>,
+    /// Receiver for all WebSocket events (input, permissions, acks, shutdown)
+    pub ws_event_rx: mpsc::UnboundedReceiver<WsEvent>,
     /// Sender for Claude outputs to the output forwarder
     pub output_tx: mpsc::UnboundedSender<ClaudeOutput>,
     /// WebSocket write handle for sending permission requests directly
@@ -469,8 +472,6 @@ pub struct ConnectionState {
     pub connection_start: Instant,
     /// Buffer for pending outputs
     pub output_buffer: Arc<Mutex<PendingOutputBuffer>>,
-    /// Receiver for wiggum mode activation
-    pub wiggum_rx: mpsc::UnboundedReceiver<String>,
     /// Current wiggum state (if active)
     pub wiggum_state: Option<WiggumState>,
 }
@@ -490,14 +491,8 @@ async fn run_message_loop(
     // Channel for Claude outputs
     let (output_tx, output_rx) = mpsc::unbounded_channel::<ClaudeOutput>();
 
-    // Channel for permission responses from frontend
-    let (perm_tx, perm_rx) = mpsc::unbounded_channel::<PermissionResponseData>();
-
-    // Channel for output acknowledgments from backend
-    let (ack_tx, ack_rx) = mpsc::unbounded_channel::<u64>();
-
-    // Channel for wiggum mode activation
-    let (wiggum_tx, wiggum_rx) = mpsc::unbounded_channel::<String>();
+    // Unified channel for all WebSocket events (input, permissions, acks, shutdown)
+    let (ws_event_tx, ws_event_rx) = mpsc::unbounded_channel::<WsEvent>();
 
     // Wrap ws_write for sharing
     let ws_write = std::sync::Arc::new(tokio::sync::Mutex::new(ws_write));
@@ -519,31 +514,21 @@ async fn run_message_loop(
     );
 
     // Spawn WebSocket reader task
-    let reader_task = spawn_ws_reader(
-        ws_read,
-        session.input_tx.clone(),
-        perm_tx,
-        ack_tx,
-        ws_write.clone(),
-        disconnect_tx,
-        wiggum_tx,
-    );
+    let reader_task = spawn_ws_reader(ws_read, ws_event_tx, ws_write.clone(), disconnect_tx);
 
     // Create connection state (per-connection channels and timing)
     let mut conn_state = ConnectionState {
-        perm_rx,
-        ack_rx,
+        ws_event_rx,
         output_tx,
         ws_write: ws_write.clone(),
         disconnect_rx,
         connection_start,
         output_buffer: session.output_buffer.clone(),
-        wiggum_rx,
         wiggum_state: None,
     };
 
     // Main loop
-    let result = run_main_loop(session.claude_session, session.input_rx, &mut conn_state).await;
+    let result = run_main_loop(session.claude_session, &mut conn_state).await;
 
     // Clean up
     output_task.abort();
@@ -933,22 +918,15 @@ fn format_duration(ms: u64) -> String {
 /// Spawn the WebSocket reader task
 fn spawn_ws_reader(
     mut ws_read: WsRead,
-    input_tx: mpsc::UnboundedSender<String>,
-    perm_tx: mpsc::UnboundedSender<PermissionResponseData>,
-    ack_tx: mpsc::UnboundedSender<u64>,
+    event_tx: mpsc::UnboundedSender<WsEvent>,
     ws_write: SharedWsWrite,
     disconnect_tx: tokio::sync::oneshot::Sender<()>,
-    wiggum_tx: mpsc::UnboundedSender<String>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         while let Some(msg) = ws_read.next().await {
             match msg {
                 Ok(Message::Text(text)) => {
-                    if !handle_ws_text_message(
-                        &text, &input_tx, &perm_tx, &ack_tx, &ws_write, &wiggum_tx,
-                    )
-                    .await
-                    {
+                    if !handle_ws_text_message(&text, &event_tx, &ws_write).await {
                         break;
                     }
                 }
@@ -971,11 +949,8 @@ fn spawn_ws_reader(
 /// Handle a text message from the WebSocket
 async fn handle_ws_text_message(
     text: &str,
-    input_tx: &mpsc::UnboundedSender<String>,
-    perm_tx: &mpsc::UnboundedSender<PermissionResponseData>,
-    ack_tx: &mpsc::UnboundedSender<u64>,
+    event_tx: &mpsc::UnboundedSender<WsEvent>,
     ws_write: &SharedWsWrite,
-    wiggum_tx: &mpsc::UnboundedSender<String>,
 ) -> bool {
     debug!("ws recv: {}", truncate(text, 200));
 
@@ -995,7 +970,10 @@ async fn handle_ws_text_message(
             if send_mode == Some(SendMode::Wiggum) {
                 debug!("→ [input/wiggum] {}", truncate(&user_text, 80));
                 // Signal wiggum mode activation with the original prompt
-                if wiggum_tx.send(user_text.clone()).is_err() {
+                if event_tx
+                    .send(WsEvent::WiggumActivation(user_text.clone()))
+                    .is_err()
+                {
                     error!("Failed to send wiggum activation");
                     return false;
                 }
@@ -1004,13 +982,13 @@ async fn handle_ws_text_message(
                     "{}\n\nTake action on the directions above until fully complete. If complete, respond only with DONE.",
                     user_text
                 );
-                if input_tx.send(wiggum_prompt).is_err() {
+                if event_tx.send(WsEvent::Input(wiggum_prompt)).is_err() {
                     error!("Failed to send input to channel");
                     return false;
                 }
             } else {
                 debug!("→ [input] {}", truncate(&user_text, 80));
-                if input_tx.send(user_text).is_err() {
+                if event_tx.send(WsEvent::Input(user_text)).is_err() {
                     error!("Failed to send input to channel");
                     return false;
                 }
@@ -1026,7 +1004,7 @@ async fn handle_ws_text_message(
                 other => other.to_string(),
             };
             debug!("→ [seq_input] seq={} {}", seq, truncate(&text, 80));
-            if input_tx.send(text).is_err() {
+            if event_tx.send(WsEvent::Input(text)).is_err() {
                 error!("Failed to send input to channel");
                 return false;
             }
@@ -1056,14 +1034,14 @@ async fn handle_ws_text_message(
                 permissions.len(),
                 reason
             );
-            if perm_tx
-                .send(PermissionResponseData {
+            if event_tx
+                .send(WsEvent::PermissionResponse(PermissionResponseData {
                     request_id,
                     allow,
                     input,
                     permissions,
                     reason,
-                })
+                }))
                 .is_err()
             {
                 error!("Failed to send permission response to channel");
@@ -1075,7 +1053,7 @@ async fn handle_ws_text_message(
             ack_seq,
         } => {
             debug!("→ [output_ack] seq={}", ack_seq);
-            if ack_tx.send(ack_seq).is_err() {
+            if event_tx.send(WsEvent::OutputAck(ack_seq)).is_err() {
                 error!("Failed to send output ack to channel");
                 return false;
             }
@@ -1095,7 +1073,7 @@ async fn handle_ws_text_message(
                 "Server shutting down: {} (reconnecting in {}ms)",
                 reason, reconnect_delay_ms
             );
-            // Returning false will trigger the reconnect cycle
+            let _ = event_tx.send(WsEvent::ServerShutdown { reconnect_delay_ms });
             return false;
         }
         _ => {
@@ -1109,7 +1087,6 @@ async fn handle_ws_text_message(
 /// Run the main select loop
 async fn run_main_loop(
     claude_session: &mut ClaudeSession,
-    input_rx: &mut mpsc::UnboundedReceiver<String>,
     state: &mut ConnectionState,
 ) -> ConnectionResult {
     use claude_session_lib::{Permission, PermissionResponse as LibPermissionResponse};
@@ -1121,59 +1098,66 @@ async fn run_main_loop(
                 return ConnectionResult::Disconnected(state.connection_start.elapsed());
             }
 
-            Some(text) = input_rx.recv() => {
-                debug!("sending to claude process: {}", truncate(&text, 100));
-
-                if let Err(e) = claude_session.send_input(serde_json::Value::String(text)).await {
-                    error!("Failed to send to Claude: {}", e);
-                    return ConnectionResult::ClaudeExited;
-                }
-            }
-
-            // Wiggum mode activation
-            Some(original_prompt) = state.wiggum_rx.recv() => {
-                info!("Wiggum mode activated with prompt: {}", truncate(&original_prompt, 60));
-                state.wiggum_state = Some(WiggumState {
-                    original_prompt,
-                    iteration: 1,
-                });
-            }
-
-            Some(perm_response) = state.perm_rx.recv() => {
-                debug!("sending permission response to claude: {:?}", perm_response);
-
-                // Build the library's PermissionResponse
-                let lib_response = if perm_response.allow {
-                    let input = perm_response.input.unwrap_or(serde_json::Value::Object(Default::default()));
-                    let permissions: Vec<Permission> = perm_response
-                        .permissions
-                        .iter()
-                        .map(Permission::from_suggestion)
-                        .collect();
-
-                    if permissions.is_empty() {
-                        LibPermissionResponse::allow_with_input(input)
-                    } else {
-                        LibPermissionResponse::allow_with_input_and_remember(input, permissions)
+            Some(ws_event) = state.ws_event_rx.recv() => {
+                match ws_event {
+                    WsEvent::Input(text) => {
+                        debug!("sending to claude process: {}", truncate(&text, 100));
+                        if let Err(e) = claude_session.send_input(serde_json::Value::String(text)).await {
+                            error!("Failed to send to Claude: {}", e);
+                            return ConnectionResult::ClaudeExited;
+                        }
                     }
-                } else {
-                    let reason = perm_response.reason.unwrap_or_else(|| "User denied".to_string());
-                    LibPermissionResponse::deny_with_reason(reason)
-                };
 
-                if let Err(e) = claude_session.respond_permission(&perm_response.request_id, lib_response).await {
-                    error!("Failed to send permission response to Claude: {}", e);
-                    return ConnectionResult::ClaudeExited;
-                }
-            }
+                    WsEvent::WiggumActivation(original_prompt) => {
+                        info!("Wiggum mode activated with prompt: {}", truncate(&original_prompt, 60));
+                        state.wiggum_state = Some(WiggumState {
+                            original_prompt,
+                            iteration: 1,
+                        });
+                    }
 
-            Some(ack_seq) = state.ack_rx.recv() => {
-                // Acknowledge receipt of messages from backend
-                let mut buf = state.output_buffer.lock().await;
-                buf.acknowledge(ack_seq);
-                // Persist periodically (on every ack for now, could be batched)
-                if let Err(e) = buf.persist() {
-                    warn!("Failed to persist buffer after ack: {}", e);
+                    WsEvent::PermissionResponse(perm_response) => {
+                        debug!("sending permission response to claude: {:?}", perm_response);
+
+                        // Build the library's PermissionResponse
+                        let lib_response = if perm_response.allow {
+                            let input = perm_response.input.unwrap_or(serde_json::Value::Object(Default::default()));
+                            let permissions: Vec<Permission> = perm_response
+                                .permissions
+                                .iter()
+                                .map(Permission::from_suggestion)
+                                .collect();
+
+                            if permissions.is_empty() {
+                                LibPermissionResponse::allow_with_input(input)
+                            } else {
+                                LibPermissionResponse::allow_with_input_and_remember(input, permissions)
+                            }
+                        } else {
+                            let reason = perm_response.reason.unwrap_or_else(|| "User denied".to_string());
+                            LibPermissionResponse::deny_with_reason(reason)
+                        };
+
+                        if let Err(e) = claude_session.respond_permission(&perm_response.request_id, lib_response).await {
+                            error!("Failed to send permission response to Claude: {}", e);
+                            return ConnectionResult::ClaudeExited;
+                        }
+                    }
+
+                    WsEvent::OutputAck(ack_seq) => {
+                        // Acknowledge receipt of messages from backend
+                        let mut buf = state.output_buffer.lock().await;
+                        buf.acknowledge(ack_seq);
+                        // Persist periodically (on every ack for now, could be batched)
+                        if let Err(e) = buf.persist() {
+                            warn!("Failed to persist buffer after ack: {}", e);
+                        }
+                    }
+
+                    WsEvent::ServerShutdown { reconnect_delay_ms } => {
+                        info!("Server graceful shutdown, will reconnect in {}ms", reconnect_delay_ms);
+                        return ConnectionResult::Disconnected(state.connection_start.elapsed());
+                    }
                 }
             }
 

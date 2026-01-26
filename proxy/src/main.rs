@@ -445,13 +445,8 @@ async fn run_proxy_session(mut config: ProxySessionConfig) -> Result<()> {
 
         ui::print_started();
 
-        // Create input channel (shared across reconnections)
-        let (input_tx, mut input_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
-
         // Run the connection loop
-        let result =
-            session::run_connection_loop(&config, &mut claude_session, input_tx, &mut input_rx)
-                .await;
+        let result = session::run_connection_loop(&config, &mut claude_session).await;
 
         let _ = claude_session.stop().await;
 
